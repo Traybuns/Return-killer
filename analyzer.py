@@ -70,11 +70,246 @@ class ReturnKillerAnalyzer:
 
     def analyze_product(self, product: Dict[str, Any]) -> AnalysisResult:
         """Main entry point - analyze a product and return insights."""
-        
+        # Product listing analysis currently uses the high-quality simulated path.
+        # Space photo scanning uses Bedrock Nova when enabled (see scan_space).
+        return self._analyze_simulated(product)
+
+    def scan_space(
+        self,
+        image_bytes: bytes,
+        media_type: str = "image/jpeg",
+        product: Optional[Dict[str, Any]] = None,
+        user_hint: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Analyze a photo of a real-world space (cabinet, shelf, etc.) using
+        Amazon Nova vision on Bedrock. Returns estimated clearances and fit advice.
+        """
         if self.use_bedrock and self.bedrock_client:
-            return self._analyze_with_bedrock(product)
+            try:
+                return self._scan_space_bedrock(image_bytes, media_type, product, user_hint)
+            except Exception as e:
+                print(f"⚠ Bedrock space scan failed: {e}")
+                return self._scan_space_simulated(product, user_hint, error=str(e))
+        return self._scan_space_simulated(product, user_hint)
+
+    def _scan_space_bedrock(
+        self,
+        image_bytes: bytes,
+        media_type: str,
+        product: Optional[Dict[str, Any]],
+        user_hint: Optional[str],
+    ) -> Dict[str, Any]:
+        import base64
+
+        fmt = "jpeg"
+        if "png" in (media_type or "").lower():
+            fmt = "png"
+        elif "webp" in (media_type or "").lower():
+            fmt = "webp"
+        elif "gif" in (media_type or "").lower():
+            fmt = "gif"
+
+        product_ctx = "No product selected."
+        dims = {}
+        if product:
+            dims = product.get("dimensions") or {}
+            product_ctx = (
+                f"Product: {product.get('title', 'Unknown')}\n"
+                f"Dimensions (cm): L={dims.get('length_cm')} W={dims.get('width_cm')} H={dims.get('height_cm')}"
+            )
+
+        hint = user_hint or "No extra hint from user."
+
+        prompt = f"""You are a spatial fit assistant for Amazon shoppers.
+Analyze this photo of a real-world storage or placement space (cabinet, shelf, counter, floor corner, etc.).
+
+{product_ctx}
+User hint: {hint}
+
+Estimate what you can see. Be honest about uncertainty.
+Return ONLY valid JSON (no markdown) with this shape:
+{{
+  "space_type": "cabinet|shelf|counter|closet|floor|other",
+  "estimated_clearance_height_cm": number or null,
+  "estimated_clearance_width_cm": number or null,
+  "estimated_depth_cm": number or null,
+  "confidence": "high|medium|low",
+  "observations": ["short bullet", "..."],
+  "fit_verdict": "likely_fits|tight|unlikely|unknown",
+  "spoken_summary": "2-3 sentences a voice assistant would say to the shopper",
+  "advice": "one practical next step"
+}}
+
+Rules:
+- Prefer centimeters.
+- If you cannot measure reliably, use null and confidence low — do not invent precise numbers.
+- If product dimensions are known, compare them in fit_verdict and spoken_summary.
+- spoken_summary must be natural speech, no JSON.
+"""
+
+        # Prefer Nova Lite / Pro multimodal understanding models
+        model_ids = [
+            "us.amazon.nova-lite-v1:0",
+            "amazon.nova-lite-v1:0",
+            "us.amazon.nova-pro-v1:0",
+            "amazon.nova-pro-v1:0",
+        ]
+
+        b64 = base64.b64encode(image_bytes).decode("utf-8")
+        last_err = None
+
+        for model_id in model_ids:
+            try:
+                body = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "image": {
+                                        "format": fmt,
+                                        "source": {"bytes": b64},
+                                    }
+                                },
+                                {"text": prompt},
+                            ],
+                        }
+                    ],
+                    "inferenceConfig": {
+                        "maxTokens": 800,
+                        "temperature": 0.2,
+                    },
+                }
+                # Converse API
+                response = self.bedrock_client.converse(
+                    modelId=model_id,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "image": {
+                                        "format": fmt,
+                                        "source": {"bytes": image_bytes},
+                                    }
+                                },
+                                {"text": prompt},
+                            ],
+                        }
+                    ],
+                    inferenceConfig={"maxTokens": 800, "temperature": 0.2},
+                )
+                text = response["output"]["message"]["content"][0]["text"]
+                parsed = self._parse_json_loose(text)
+                parsed["engine"] = "bedrock"
+                parsed["model_id"] = model_id
+                parsed["product_asin"] = (product or {}).get("asin")
+                if dims:
+                    parsed["product_dimensions_cm"] = dims
+                return parsed
+            except Exception as e:
+                last_err = e
+                continue
+
+        raise RuntimeError(f"All Bedrock vision models failed: {last_err}")
+
+    def _parse_json_loose(self, text: str) -> Dict[str, Any]:
+        text = (text or "").strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start >= 0 and end > start:
+                return json.loads(text[start : end + 1])
+            return {
+                "space_type": "other",
+                "estimated_clearance_height_cm": None,
+                "estimated_clearance_width_cm": None,
+                "estimated_depth_cm": None,
+                "confidence": "low",
+                "observations": ["Could not parse model response"],
+                "fit_verdict": "unknown",
+                "spoken_summary": text[:400] if text else "I could not analyze that photo.",
+                "advice": "Try a clearer photo with a known object for scale.",
+            }
+
+    def _scan_space_simulated(
+        self,
+        product: Optional[Dict[str, Any]] = None,
+        user_hint: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fallback when Bedrock is off or fails — still demoable."""
+        dims = (product or {}).get("dimensions") or {}
+        h = dims.get("height_cm")
+        w = dims.get("width_cm")
+        hint = (user_hint or "").lower()
+
+        # Toy heuristic from hint text if present
+        est_h = 45.0
+        if "40" in hint:
+            est_h = 40.0
+        elif "30" in hint:
+            est_h = 30.0
+        elif "50" in hint:
+            est_h = 50.0
+
+        verdict = "unknown"
+        if h:
+            if est_h >= h + 3:
+                verdict = "likely_fits"
+            elif est_h >= h:
+                verdict = "tight"
+            else:
+                verdict = "unlikely"
+
+        title = (product or {}).get("title") or "this product"
+        short = title.split(" - ")[0]
+
+        spoken = (
+            f"From your photo I estimated about {est_h:.0f} centimeters of clearance. "
+        )
+        if h:
+            spoken += f"The {short} is {h:.0f} cm tall. "
+            if verdict == "likely_fits":
+                spoken += "It should fit with a little room to spare."
+            elif verdict == "tight":
+                spoken += "It may fit, but clearance looks tight — measure once to be sure."
+            else:
+                spoken += "It probably will not fit in that opening."
         else:
-            return self._analyze_simulated(product)
+            spoken += "Select a product so I can compare exact dimensions."
+
+        if error:
+            spoken = (
+                "I could not reach the vision model, so this is a demo estimate only. "
+                + spoken
+            )
+
+        return {
+            "space_type": "cabinet" if "cabinet" in hint else "shelf",
+            "estimated_clearance_height_cm": est_h,
+            "estimated_clearance_width_cm": 60.0,
+            "estimated_depth_cm": 35.0,
+            "confidence": "low",
+            "observations": [
+                "Simulated scan (enable Bedrock Nova for real vision)",
+                f"Hint used: {user_hint or 'none'}",
+            ],
+            "fit_verdict": verdict,
+            "spoken_summary": spoken,
+            "advice": "Enable Bedrock and retake the photo in good light with the opening fully visible.",
+            "engine": "simulated",
+            "product_asin": (product or {}).get("asin"),
+            "product_dimensions_cm": dims or None,
+            "error": error,
+        }
 
     def _analyze_simulated(self, product: Dict[str, Any]) -> AnalysisResult:
         """
@@ -441,12 +676,15 @@ class ReturnKillerAnalyzer:
 
 
 def load_sample_products(path: str = None) -> List[Dict]:
-    """Load sample products from JSON."""
+    """Load sample products from JSON (supports flat repo or backend/ layout)."""
     if path is None:
-        path = os.path.join(
-            os.path.dirname(__file__), 
-            "..", "data", "sample_products.json"
-        )
+        base = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(base, "data", "sample_products.json"),
+            os.path.join(base, "..", "data", "sample_products.json"),
+            os.path.join(base, "sample_products.json"),
+        ]
+        path = next((c for c in candidates if os.path.isfile(c)), candidates[0])
     with open(path) as f:
         data = json.load(f)
     return data["products"]

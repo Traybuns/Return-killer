@@ -1,0 +1,113 @@
+{
+  "products": [
+    {
+      "asin": "B0EXAMPLE01",
+      "title": "Modern Bamboo Cutting Board - Large Kitchen Chopping Board",
+      "bullets": [
+        "Premium organic bamboo material",
+        "Large size perfect for family meals",
+        "Includes juice groove",
+        "Easy to clean and maintain",
+        "Eco-friendly and sustainable"
+      ],
+      "description": "This beautiful bamboo cutting board is perfect for all your kitchen needs. Large surface area makes food prep easy.",
+      "images": [
+        "https://m.media-amazon.com/images/I/71example1.jpg",
+        "https://m.media-amazon.com/images/I/71example2.jpg"
+      ],
+      "dimensions": {
+        "length_cm": 45,
+        "width_cm": 30,
+        "height_cm": 2
+      },
+      "category": "Home & Kitchen",
+      "reviews": [
+        {
+          "rating": 2,
+          "title": "Smaller than expected",
+          "text": "The board looks huge in the photos but when it arrived it was much smaller than I thought. Doesn't fit all my veggies at once."
+        },
+        {
+          "rating": 3,
+          "title": "Color is different",
+          "text": "The bamboo is much lighter in person than the dark rich color shown in the main image. Looks cheap."
+        },
+        {
+          "rating": 1,
+          "title": "Doesn't fit under my cabinet",
+          "text": "I measured my cabinet space and this is too tall when stored upright. The product page didn't show the thickness clearly."
+        },
+        {
+          "rating": 5,
+          "title": "Great quality",
+          "text": "Love the juice groove. Very sturdy."
+        },
+        {
+          "rating": 2,
+          "title": "Misleading size",
+          "text": "Photos make it look like a massive board. In reality it's average sized. Returning."
+        },
+        {
+          "rating": 4,
+          "title": "Nice board but",
+          "text": "Good quality but the listing should show a banana or phone for scale. Hard to tell actual size."
+        }
+      ],
+      "return_reasons": {
+        "not_as_described": 18,
+        "wrong_size": 12,
+        "defective": 3,
+        "no_longer_needed": 5
+      }
+    },
+    {
+      "asin": "B0EXAMPLE02",
+      "title": "Compact Air Fryer 5.8QT Digital",
+      "bullets": [
+        "5.8 Quart capacity",
+        "Digital touchscreen",
+        "8 preset cooking functions",
+        "Non-stick basket",
+        "60 minute timer"
+      ],
+      "description": "Enjoy healthier fried food with this powerful air fryer. Perfect for families.",
+      "images": [
+        "https://m.media-amazon.com/images/I/81airfryer1.jpg"
+      ],
+      "dimensions": {
+        "length_cm": 35,
+        "width_cm": 28,
+        "height_cm": 32
+      },
+      "category": "Home & Kitchen",
+      "reviews": [
+        {
+          "rating": 2,
+          "title": "Too big for my counter",
+          "text": "I thought this was compact but it takes up so much space. The photos don't show how deep it is."
+        },
+        {
+          "rating": 1,
+          "title": "Won't fit under cabinets",
+          "text": "My kitchen cabinets have 15 inches of clearance. This is taller. Had to return."
+        },
+        {
+          "rating": 3,
+          "title": "Basket is smaller than expected",
+          "text": "The 5.8QT is the outer size. Actual cooking space is much less. Not enough for a family of 4."
+        }
+      ],
+      "return_reasons": {
+        "not_as_described": 14,
+        "wrong_size": 22,
+        "defective": 2,
+        "no_longer_needed": 4
+      }
+    }
+  ]
+}
+
+
+
+
+

@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReturnKillerBedrockInvoke",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-lite*",
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-pro*",
+        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-lite*",
+        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-pro*"
+      ]
+    }
+  ]
+}

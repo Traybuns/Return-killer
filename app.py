@@ -3,7 +3,7 @@ ReturnKiller API
 Simple FastAPI server that exposes the analysis engine.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -27,8 +27,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize analyzer (set use_bedrock=True when AWS credentials are available)
-analyzer = ReturnKillerAnalyzer(use_bedrock=False)
+# Set RETURNKILLER_USE_BEDROCK=1 (+ AWS credentials) to enable Nova vision scans
+_use_bedrock = os.environ.get("RETURNKILLER_USE_BEDROCK", "").lower() in ("1", "true", "yes")
+analyzer = ReturnKillerAnalyzer(use_bedrock=_use_bedrock)
 
 # In-memory cache of analyses
 analysis_cache: Dict[str, Any] = {}
@@ -49,14 +50,16 @@ class FitQuestion(BaseModel):
 def root():
     return {
         "name": "ReturnKiller",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "status": "running",
+        "bedrock_vision": _use_bedrock,
         "endpoints": {
             "GET /products": "List sample products",
             "GET /analyze/{asin}": "Analyze a sample product by ASIN",
             "POST /analyze": "Analyze a custom product payload",
             "POST /fit": "Ask a fit question (Alexa-style)",
-            "GET /demo": "Simple HTML demo UI"
+            "POST /scan": "Scan a space photo (Bedrock Nova vision)",
+            "GET /demo": "Interactive demo UI"
         }
     }
 
@@ -146,41 +149,78 @@ def fit_question(req: FitQuestion):
     }
 
 
+
+
+
+
+@app.post("/scan")
+async def scan_space(
+    file: UploadFile = File(...),
+    asin: Optional[str] = Form(None),
+    hint: Optional[str] = Form(None),
+):
+    """
+    Upload a photo of a cabinet/shelf/space.
+    Uses Bedrock Nova vision when RETURNKILLER_USE_BEDROCK=1.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file")
+
+    image_bytes = await file.read()
+    if len(image_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 8MB)")
+    if len(image_bytes) < 100:
+        raise HTTPException(status_code=400, detail="Image file is empty")
+
+    product = None
+    if asin:
+        products = load_sample_products()
+        product = next((p for p in products if p["asin"] == asin), None)
+
+    result = analyzer.scan_space(
+        image_bytes=image_bytes,
+        media_type=file.content_type or "image/jpeg",
+        product=product,
+        user_hint=hint,
+    )
+    return result
+
+
 @app.get("/demo", response_class=HTMLResponse)
 def demo_ui():
-    """Polished interactive demo UI."""
+    """Glass / bubble polished demo UI with Alexa-first interaction."""
     html = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ReturnKiller — Stop preventable returns</title>
+  <title>ReturnKiller — Will it fit?</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b0f14;
-      --bg-elevated: #111820;
-      --card: #151d28;
-      --card-hover: #1a2433;
-      --border: rgba(255,255,255,0.06);
-      --border-strong: rgba(255,255,255,0.1);
+      --bg: #070a0f;
+      --glass: rgba(255,255,255,0.045);
+      --glass-strong: rgba(255,255,255,0.08);
+      --glass-border: rgba(255,255,255,0.12);
+      --glass-highlight: rgba(255,255,255,0.18);
       --accent: #ff9900;
-      --accent-soft: rgba(255,153,0,0.12);
-      --accent-glow: rgba(255,153,0,0.25);
-      --text: #f0f2f5;
-      --text-secondary: #c5cdd6;
-      --muted: #7a8694;
-      --danger: #ff4757;
-      --danger-soft: rgba(255,71,87,0.12);
-      --success: #00d68f;
-      --success-soft: rgba(0,214,143,0.12);
+      --accent-2: #ff6b00;
+      --accent-soft: rgba(255,153,0,0.15);
+      --accent-glow: rgba(255,153,0,0.35);
+      --text: #f4f6f8;
+      --text-secondary: #b8c0cc;
+      --muted: #7d8996;
+      --danger: #ff5c6c;
+      --danger-soft: rgba(255,92,108,0.14);
+      --success: #00e5a0;
+      --success-soft: rgba(0,229,160,0.12);
       --warning: #ffb020;
-      --radius: 16px;
-      --radius-sm: 10px;
-      --shadow: 0 8px 32px rgba(0,0,0,0.35);
+      --radius: 24px;
+      --radius-sm: 16px;
+      --radius-pill: 999px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -191,212 +231,358 @@ def demo_ui():
       color: var(--text);
       line-height: 1.55;
       min-height: 100vh;
-      background-image:
-        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(255,153,0,0.08), transparent),
-        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(0,214,143,0.04), transparent);
+      overflow-x: hidden;
     }
 
-    .header {
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(16px);
-      background: rgba(11,15,20,0.85);
-      border-bottom: 1px solid var(--border);
-      padding: 14px 24px;
+    /* Soft ambient orbs */
+    body::before, body::after {
+      content: "";
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(80px);
+      z-index: 0;
+      pointer-events: none;
     }
-    .header-inner {
-      max-width: 1080px;
+    body::before {
+      width: 420px;
+      height: 420px;
+      top: -120px;
+      left: -80px;
+      background: rgba(255,153,0,0.14);
+    }
+    body::after {
+      width: 380px;
+      height: 380px;
+      bottom: -100px;
+      right: -60px;
+      background: rgba(0,229,160,0.08);
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 1040px;
       margin: 0 auto;
+      padding: 28px 20px 80px;
+    }
+
+    /* Header */
+    .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 16px;
+      margin-bottom: 36px;
     }
     .logo {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
       font-weight: 700;
-      font-size: 1.15rem;
+      font-size: 1.2rem;
       letter-spacing: -0.02em;
     }
     .logo-mark {
-      width: 32px;
-      height: 32px;
-      background: linear-gradient(135deg, var(--accent), #ff6b00);
-      border-radius: 8px;
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(145deg, var(--accent), var(--accent-2));
+      border-radius: 14px;
       display: grid;
       place-items: center;
-      font-size: 16px;
-      box-shadow: 0 0 20px var(--accent-glow);
-    }
-    .badge {
-      font-size: 0.7rem;
-      font-weight: 600;
-      color: var(--accent);
-      background: var(--accent-soft);
-      padding: 3px 8px;
-      border-radius: 20px;
-      letter-spacing: 0.03em;
+      font-size: 18px;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.15) inset,
+        0 8px 24px var(--accent-glow);
     }
 
-    main {
-      max-width: 1080px;
-      margin: 0 auto;
-      padding: 40px 24px 80px;
+    /* Glass card base */
+    .glass {
+      background: var(--glass);
+      backdrop-filter: blur(24px) saturate(140%);
+      -webkit-backdrop-filter: blur(24px) saturate(140%);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      box-shadow:
+        0 8px 32px rgba(0,0,0,0.25),
+        0 1px 0 var(--glass-highlight) inset;
     }
 
-    .hero { margin-bottom: 36px; }
+    /* Hero */
+    .hero {
+      text-align: center;
+      margin-bottom: 32px;
+    }
     .hero h1 {
-      font-size: clamp(1.8rem, 4vw, 2.4rem);
+      font-size: clamp(1.9rem, 5vw, 2.6rem);
       font-weight: 800;
-      letter-spacing: -0.03em;
-      line-height: 1.2;
-      margin-bottom: 10px;
+      letter-spacing: -0.035em;
+      line-height: 1.15;
+      margin-bottom: 12px;
     }
-    .hero h1 span { color: var(--accent); }
+    .hero h1 span {
+      background: linear-gradient(135deg, var(--accent), #ffc14d);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
     .hero p {
       color: var(--muted);
       font-size: 1.05rem;
-      max-width: 520px;
+      max-width: 440px;
+      margin: 0 auto;
     }
 
-    .panel {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 24px;
-      margin-bottom: 28px;
-      box-shadow: var(--shadow);
+    /* Product picker */
+    .picker {
+      padding: 22px;
+      margin-bottom: 20px;
     }
-    .panel-label {
-      font-size: 0.75rem;
+    .picker-label {
+      font-size: 0.72rem;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.09em;
       color: var(--muted);
       margin-bottom: 12px;
+      text-align: center;
     }
-    .controls {
+    .picker-row {
       display: flex;
       gap: 12px;
       flex-wrap: wrap;
-      align-items: stretch;
+      justify-content: center;
     }
     select {
       flex: 1;
-      min-width: 240px;
+      min-width: 220px;
+      max-width: 420px;
       appearance: none;
-      background: var(--bg-elevated) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%237a8694' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E") no-repeat right 14px center;
-      border: 1px solid var(--border-strong);
+      background: rgba(0,0,0,0.25) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%237d8996' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E") no-repeat right 16px center;
+      border: 1px solid var(--glass-border);
       color: var(--text);
-      padding: 12px 40px 12px 16px;
-      border-radius: var(--radius-sm);
+      padding: 14px 42px 14px 18px;
+      border-radius: var(--radius-pill);
       font-size: 0.95rem;
       font-family: inherit;
       cursor: pointer;
-      transition: border-color 0.15s, box-shadow 0.15s;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
     }
     select:hover, select:focus {
-      border-color: var(--accent);
+      border-color: rgba(255,153,0,0.5);
       outline: none;
-      box-shadow: 0 0 0 3px var(--accent-soft);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+      background-color: rgba(0,0,0,0.35);
     }
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 8px;
-      background: linear-gradient(135deg, var(--accent), #ff6b00);
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
       color: #111;
       border: none;
-      padding: 12px 22px;
-      border-radius: var(--radius-sm);
-      font-weight: 650;
+      padding: 14px 26px;
+      border-radius: var(--radius-pill);
+      font-weight: 700;
       font-size: 0.95rem;
       font-family: inherit;
       cursor: pointer;
-      transition: transform 0.12s, box-shadow 0.15s, filter 0.15s;
+      transition: transform 0.15s, box-shadow 0.2s, filter 0.15s;
       white-space: nowrap;
-      box-shadow: 0 4px 16px var(--accent-glow);
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.2) inset,
+        0 6px 24px var(--accent-glow);
     }
     .btn:hover {
-      filter: brightness(1.08);
-      transform: translateY(-1px);
-      box-shadow: 0 6px 24px var(--accent-glow);
+      filter: brightness(1.07);
+      transform: translateY(-2px);
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.25) inset,
+        0 10px 32px var(--accent-glow);
     }
     .btn:active { transform: translateY(0); }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      transform: none;
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* Results */
+    #results {
+      display: none;
+      animation: rise 0.45s cubic-bezier(0.22,1,0.36,1);
     }
-    .btn-ghost {
-      background: transparent;
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(18px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* Alexa hero card — main interaction */
+    .alexa-hero {
+      padding: 28px 24px 24px;
+      margin-bottom: 18px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .alexa-hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 70% 60% at 50% 0%, rgba(255,153,0,0.12), transparent 70%);
+      pointer-events: none;
+    }
+    .alexa-hero > * { position: relative; }
+    .alexa-kicker {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+    .alexa-spoken {
       color: var(--text-secondary);
-      border: 1px solid var(--border-strong);
-      box-shadow: none;
+      font-size: 1.05rem;
+      line-height: 1.65;
+      max-width: 560px;
+      margin: 0 auto 22px;
     }
-    .btn-ghost:hover {
-      background: var(--card-hover);
-      border-color: var(--muted);
+    .ask-alexa-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: linear-gradient(135deg, #00caff, #00a3ff 40%, #0066ff);
+      color: #fff;
+      border: none;
+      padding: 18px 36px;
+      border-radius: var(--radius-pill);
+      font-weight: 750;
+      font-size: 1.1rem;
+      font-family: inherit;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.2s, filter 0.15s;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.25) inset,
+        0 8px 32px rgba(0,140,255,0.4);
+      margin-bottom: 16px;
+    }
+    .ask-alexa-btn:hover {
+      filter: brightness(1.08);
+      transform: translateY(-2px) scale(1.02);
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.3) inset,
+        0 12px 40px rgba(0,140,255,0.5);
+    }
+    .ask-alexa-btn:active { transform: translateY(0) scale(1); }
+    .ask-alexa-btn .mic {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+    }
+    .alexa-hint {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 18px;
+    }
+    .fit-input-wrap {
+      display: flex;
+      gap: 10px;
+      max-width: 520px;
+      margin: 0 auto;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .fit-input-wrap input {
+      flex: 1;
+      min-width: 200px;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--glass-border);
+      color: var(--text);
+      padding: 14px 18px;
+      border-radius: var(--radius-pill);
+      font-size: 0.92rem;
+      font-family: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .fit-input-wrap input:focus {
+      outline: none;
+      border-color: rgba(0,163,255,0.6);
+      box-shadow: 0 0 0 4px rgba(0,163,255,0.12);
+    }
+    .fit-input-wrap input::placeholder { color: var(--muted); }
+    .btn-soft {
+      background: var(--glass-strong);
+      color: var(--text);
+      border: 1px solid var(--glass-border);
+      box-shadow: none;
+      padding: 14px 20px;
+    }
+    .btn-soft:hover {
+      background: rgba(255,255,255,0.1);
       filter: none;
       box-shadow: none;
     }
-
-    #results {
+    #fitResult {
       display: none;
-      animation: fadeUp 0.4s ease;
+      margin-top: 18px;
+      padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      background: rgba(0,163,255,0.08);
+      border: 1px solid rgba(0,163,255,0.2);
+      text-align: left;
+      max-width: 560px;
+      margin-left: auto;
+      margin-right: auto;
+      animation: rise 0.35s ease;
     }
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(12px); }
-      to { opacity: 1; transform: translateY(0); }
+    #fitResult .label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #5cc8ff;
+      margin-bottom: 6px;
+    }
+    #fitResult .text {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.6;
     }
 
+    /* Grid of insight cards */
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      margin-bottom: 16px;
+      gap: 14px;
     }
-    @media (max-width: 720px) {
+    @media (max-width: 700px) {
       .grid { grid-template-columns: 1fr; }
     }
 
     .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 22px;
-      transition: border-color 0.2s, background 0.2s;
+      padding: 20px;
+      transition: border-color 0.2s, transform 0.2s;
     }
-    .card:hover { border-color: var(--border-strong); }
+    .card:hover {
+      border-color: var(--glass-highlight);
+    }
     .card.full { grid-column: 1 / -1; }
-
-    .card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-      gap: 12px;
-    }
     .card-title {
-      font-size: 0.8rem;
-      font-weight: 600;
+      font-size: 0.72rem;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.07em;
+      letter-spacing: 0.08em;
       color: var(--muted);
+      margin-bottom: 14px;
     }
 
-    .risk-hero {
+    /* Risk */
+    .risk-row {
       display: flex;
       align-items: center;
-      gap: 24px;
+      gap: 20px;
       flex-wrap: wrap;
     }
     .risk-number {
-      font-size: 3.2rem;
+      font-size: 3rem;
       font-weight: 800;
       letter-spacing: -0.04em;
       line-height: 1;
@@ -404,15 +590,14 @@ def demo_ui():
     .risk-number.high { color: var(--danger); }
     .risk-number.medium { color: var(--warning); }
     .risk-number.low { color: var(--success); }
-    .risk-meta { flex: 1; min-width: 180px; }
     .risk-level {
       display: inline-block;
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      padding: 4px 10px;
-      border-radius: 20px;
+      padding: 5px 12px;
+      border-radius: var(--radius-pill);
       margin-bottom: 8px;
     }
     .risk-level.high { background: var(--danger-soft); color: var(--danger); }
@@ -420,16 +605,17 @@ def demo_ui():
     .risk-level.low { background: var(--success-soft); color: var(--success); }
     .risk-summary {
       color: var(--text-secondary);
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       white-space: pre-line;
       line-height: 1.6;
     }
 
+    /* Complaints */
     .complaint {
-      background: var(--bg-elevated);
-      border-radius: var(--radius-sm);
-      padding: 14px 16px;
-      margin-bottom: 10px;
+      background: rgba(0,0,0,0.22);
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
       border-left: 3px solid var(--accent);
     }
     .complaint:last-child { margin-bottom: 0; }
@@ -438,39 +624,37 @@ def demo_ui():
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
-      margin-bottom: 6px;
+      margin-bottom: 5px;
     }
-    .complaint-theme { font-weight: 600; font-size: 0.95rem; }
+    .complaint-theme { font-weight: 600; font-size: 0.92rem; }
     .tag {
-      font-size: 0.68rem;
-      font-weight: 600;
+      font-size: 0.65rem;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       padding: 2px 8px;
-      border-radius: 20px;
+      border-radius: var(--radius-pill);
     }
     .tag.high { background: var(--danger-soft); color: var(--danger); }
     .tag.medium { background: rgba(255,176,32,0.15); color: var(--warning); }
     .tag.neutral { background: rgba(255,255,255,0.06); color: var(--muted); }
     .complaint-fix {
       color: var(--text-secondary);
-      font-size: 0.88rem;
-      margin-bottom: 6px;
+      font-size: 0.85rem;
+      margin-bottom: 4px;
     }
     .complaint-quote {
       color: var(--muted);
-      font-size: 0.82rem;
+      font-size: 0.8rem;
       font-style: italic;
-      border-left: 2px solid var(--border-strong);
-      padding-left: 10px;
     }
 
     .bullet-list, .visual-list { list-style: none; }
     .bullet-list li, .visual-list li {
       position: relative;
-      padding: 8px 0 8px 22px;
-      border-bottom: 1px solid var(--border);
-      font-size: 0.92rem;
+      padding: 7px 0 7px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 0.9rem;
       color: var(--text-secondary);
     }
     .bullet-list li:last-child, .visual-list li:last-child { border-bottom: none; }
@@ -478,91 +662,36 @@ def demo_ui():
       content: "";
       position: absolute;
       left: 0;
-      top: 14px;
-      width: 8px;
-      height: 8px;
+      top: 13px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--accent);
-      box-shadow: 0 0 8px var(--accent-glow);
+      box-shadow: 0 0 10px var(--accent-glow);
     }
     .visual-list li::before {
       content: "→";
       position: absolute;
       left: 0;
-      top: 8px;
+      top: 7px;
       color: var(--accent);
       font-weight: 600;
     }
 
     .size-box {
-      background: var(--bg-elevated);
-      border-radius: var(--radius-sm);
-      padding: 16px;
+      background: rgba(0,0,0,0.25);
+      border-radius: 14px;
+      padding: 14px;
       font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
       line-height: 1.7;
       color: var(--text-secondary);
       white-space: pre-wrap;
     }
 
-    .alexa-block {
-      background: linear-gradient(135deg, rgba(255,153,0,0.06), rgba(0,214,143,0.04));
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 16px;
-      margin-bottom: 14px;
-    }
-    .alexa-label {
-      font-size: 0.72rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--accent);
-      margin-bottom: 8px;
-    }
-    .alexa-text {
-      color: var(--text-secondary);
-      font-size: 0.95rem;
-      line-height: 1.6;
-    }
-    .fit-row {
-      display: flex;
-      gap: 10px;
-      margin-top: 4px;
-    }
-    .fit-row input {
-      flex: 1;
-      background: var(--bg-elevated);
-      border: 1px solid var(--border-strong);
-      color: var(--text);
-      padding: 12px 14px;
-      border-radius: var(--radius-sm);
-      font-size: 0.92rem;
-      font-family: inherit;
-      transition: border-color 0.15s, box-shadow 0.15s;
-    }
-    .fit-row input:focus {
-      outline: none;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-soft);
-    }
-    .fit-row input::placeholder { color: var(--muted); }
-    #fitResult {
-      display: none;
-      margin-top: 12px;
-      animation: fadeUp 0.3s ease;
-    }
+    .empty-state { color: var(--muted); font-size: 0.9rem; }
 
-    .empty-state {
-      color: var(--muted);
-      font-size: 0.9rem;
-      padding: 8px 0;
-    }
-
-    .btn.loading {
-      pointer-events: none;
-      opacity: 0.7;
-    }
+    .btn.loading { pointer-events: none; opacity: 0.7; }
     .btn.loading::after {
       content: "";
       width: 14px;
@@ -571,49 +700,179 @@ def demo_ui():
       border-top-color: #111;
       border-radius: 50%;
       animation: spin 0.6s linear infinite;
-      margin-left: 6px;
+      margin-left: 4px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Modal for Alexa connect */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: 100%;
+      max-width: 400px;
+      padding: 28px 24px;
+      text-align: center;
+      animation: rise 0.3s ease;
+    }
+    .modal h3 {
+      font-size: 1.25rem;
+      font-weight: 750;
+      margin-bottom: 8px;
+    }
+    .modal p {
+      color: var(--muted);
+      font-size: 0.92rem;
+      margin-bottom: 20px;
+      line-height: 1.55;
+    }
+    .modal .phrase {
+      background: rgba(0,0,0,0.35);
+      border-radius: 14px;
+      padding: 14px 16px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 18px;
+      border: 1px solid var(--glass-border);
+    }
+    .modal-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .modal-actions .btn { width: 100%; }
+
+    .scan-row {
+      display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+      margin: 14px 0 6px; align-items: center;
+    }
+    .scan-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px dashed var(--glass-border);
+      color: var(--text-secondary);
+      padding: 12px 18px; border-radius: var(--radius-pill);
+      font-weight: 600; font-size: 0.9rem; font-family: inherit;
+      cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+    .scan-btn:hover {
+      border-color: rgba(255,153,0,0.5); background: var(--accent-soft); color: var(--text);
+    }
+    .scan-preview {
+      display: none; margin: 12px auto 0; max-width: 280px;
+      border-radius: 16px; overflow: hidden;
+      border: 1px solid var(--glass-border);
+    }
+    .scan-preview img { width: 100%; display: block; max-height: 180px; object-fit: cover; }
+    .scan-status {
+      display: none; margin-top: 10px; font-size: 0.85rem; color: var(--muted);
+    }
+    .scan-status.active { display: block; }
+    #scanResultBox {
+      display: none; margin-top: 16px; text-align: left; max-width: 560px;
+      margin-left: auto; margin-right: auto; padding: 16px 18px;
+      border-radius: var(--radius-sm);
+      background: rgba(255,153,0,0.08);
+      border: 1px solid rgba(255,153,0,0.22);
+      animation: rise 0.35s ease;
+    }
+    #scanResultBox .label {
+      font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--accent); margin-bottom: 6px;
+    }
+    #scanResultBox .metrics {
+      display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0;
+    }
+    #scanResultBox .metric {
+      background: rgba(0,0,0,0.25); border-radius: 999px;
+      padding: 4px 12px; font-size: 0.8rem; color: var(--text-secondary);
+    }
   </style>
 </head>
 <body>
-  <header class="header">
-    <div class="header-inner">
+  <div class="wrap">
+    <header class="header">
       <div class="logo">
         <div class="logo-mark">🛡️</div>
         ReturnKiller
       </div>
-      <span class="badge">Hackathon Demo</span>
-    </div>
-  </header>
+    </header>
 
-  <main>
     <section class="hero">
-      <h1>Stop <span>size & description</span> returns before they happen</h1>
-      <p>Analyze any listing for return risk, get concrete fixes, and preview the Alexa “will it fit?” experience.</p>
+      <h1>Will it <span>actually fit?</span></h1>
+      <p>Spot size & description return risks — then ask Alexa before you buy.</p>
     </section>
 
-    <section class="panel">
-      <div class="panel-label">Select a product to analyze</div>
-      <div class="controls">
+    <section class="glass picker">
+      <div class="picker-label">Choose a product</div>
+      <div class="picker-row">
         <select id="productSelect">
           <option value="">Loading products…</option>
         </select>
-        <button class="btn" id="analyzeBtn" onclick="runAnalysis()">
-          Analyze Listing
-        </button>
+        <button class="btn" id="analyzeBtn" onclick="runAnalysis()">Analyze</button>
       </div>
     </section>
 
     <div id="results">
-      <div class="grid">
-        <div class="card full">
-          <div class="card-header">
-            <span class="card-title">Return Risk Score</span>
-          </div>
-          <div class="risk-hero">
+      <!-- Alexa first -->
+      <section class="glass alexa-hero">
+        <div class="alexa-kicker">Alexa experience</div>
+        <p id="alexaResponse" class="alexa-spoken">Select a product and analyze to hear how Alexa answers “will it fit?”</p>
+
+        <button class="ask-alexa-btn" id="askAlexaBtn" onclick="openAlexa()">
+          <span class="mic">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+              <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
+            </svg>
+          </span>
+          Ask Alexa
+        </button>
+        <p class="alexa-hint">Opens a voice-style check · works with your Echo or the Alexa app</p>
+
+        <div class="fit-input-wrap">
+          <input id="fitQuestion" placeholder="Or type a space… e.g. under a 40cm cabinet" />
+          <button class="btn btn-soft" onclick="askFit()">Check fit</button>
+        </div>
+
+        <div class="scan-row">
+          <label class="scan-btn" for="spacePhoto">
+            📷 Scan my space
+          </label>
+          <input type="file" id="spacePhoto" accept="image/*" capture="environment" style="display:none" onchange="onSpacePhoto(event)" />
+          <button class="scan-btn" type="button" onclick="document.getElementById('spacePhoto').click()">Upload photo</button>
+        </div>
+        <div class="scan-preview" id="scanPreview"><img id="scanPreviewImg" alt="Space preview" /></div>
+        <div class="scan-status" id="scanStatus">Analyzing your space with vision…</div>
+        <div id="scanResultBox">
+          <div class="label">Space scan</div>
+          <div id="scanResultText" class="text"></div>
+          <div class="metrics" id="scanMetrics"></div>
+        </div>
+
+        <div id="fitResult">
+          <div class="label">Alexa says</div>
+          <div id="fitResultText" class="text"></div>
+        </div>
+      </section>
+
+      <div class="grid" style="margin-bottom:14px">
+        <div class="glass card full">
+          <div class="card-title">Return risk</div>
+          <div class="risk-row">
             <div id="riskScore" class="risk-number">—</div>
-            <div class="risk-meta">
+            <div>
               <div id="riskLevel" class="risk-level">—</div>
               <div id="summary" class="risk-summary"></div>
             </div>
@@ -622,59 +881,47 @@ def demo_ui():
       </div>
 
       <div class="grid">
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Top Customer Complaints</span>
-          </div>
+        <div class="glass card">
+          <div class="card-title">Customer complaints</div>
           <div id="complaints"></div>
         </div>
-
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Suggested Bullets</span>
-          </div>
+        <div class="glass card">
+          <div class="card-title">Suggested bullets</div>
           <ul id="bullets" class="bullet-list"></ul>
         </div>
       </div>
 
-      <div class="grid">
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Size Chart & Fit Guide</span>
-          </div>
+      <div class="grid" style="margin-top:14px">
+        <div class="glass card">
+          <div class="card-title">Size chart</div>
           <div id="sizeChart" class="size-box"></div>
         </div>
-
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Visual Fixes</span>
-          </div>
+        <div class="glass card">
+          <div class="card-title">Visual fixes</div>
           <ul id="visuals" class="visual-list"></ul>
         </div>
       </div>
+    </div>
+  </div>
 
-      <div class="card full" style="margin-top:16px">
-        <div class="card-header">
-          <span class="card-title">Alexa · “Will it fit?” Experience</span>
-        </div>
-        <div class="alexa-block">
-          <div class="alexa-label">Spoken response on Echo Show</div>
-          <div id="alexaResponse" class="alexa-text"></div>
-        </div>
-        <div class="fit-row">
-          <input id="fitQuestion" placeholder="Ask a follow-up… e.g. will it fit under a 40cm cabinet?" />
-          <button class="btn btn-ghost" onclick="askFit()">Ask Alexa</button>
-        </div>
-        <div id="fitResult" class="alexa-block">
-          <div class="alexa-label">Alexa replies</div>
-          <div id="fitResultText" class="alexa-text"></div>
-        </div>
+  <!-- Alexa connect modal -->
+  <div class="modal-backdrop" id="alexaModal" onclick="closeAlexaBackdrop(event)">
+    <div class="glass modal" onclick="event.stopPropagation()">
+      <h3>Ask Alexa</h3>
+      <p>Say this on any Echo device, or open the Alexa app and try it there.</p>
+      <div class="phrase" id="alexaPhrase">“Alexa, ask Return Killer if this will fit under my cabinet”</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="copyPhrase()">Copy phrase</button>
+        <button class="btn btn-soft" onclick="tryAlexaApp()">Open Alexa app</button>
+        <button class="btn btn-soft" onclick="closeAlexa()">Close</button>
       </div>
     </div>
-  </main>
+  </div>
 
   <script>
     let currentAsin = null;
+    let currentTitle = "";
+    let lastSpoken = "";
 
     async function loadProducts() {
       try {
@@ -704,6 +951,8 @@ def demo_ui():
         const data = await res.json();
 
         document.getElementById('results').style.display = 'block';
+        currentTitle = data.title || "";
+        lastSpoken = data.alexa_fit_response || "";
 
         const score = data.return_risk_score;
         const level = score >= 65 ? 'high' : score >= 40 ? 'medium' : 'low';
@@ -750,6 +999,11 @@ def demo_ui():
           (data.visual_suggestions || []).map(v => `<li>${v}</li>`).join('') ||
           '<li class="empty-state">No suggestions</li>';
 
+        // Update Alexa phrase with product context
+        const short = (currentTitle.split(' - ')[0] || 'this product').slice(0, 40);
+        document.getElementById('alexaPhrase').textContent =
+          `“Alexa, ask Return Killer if the ${short} will fit under my cabinet”`;
+
         document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) {
         alert('Analysis failed. Is the server running?');
@@ -774,11 +1028,100 @@ def demo_ui():
           })
         });
         const data = await res.json();
-        const el = document.getElementById('fitResult');
         document.getElementById('fitResultText').textContent = data.spoken_response;
-        el.style.display = 'block';
+        document.getElementById('fitResult').style.display = 'block';
+        lastSpoken = data.spoken_response;
       } catch (e) {
         alert('Fit request failed.');
+      }
+    }
+
+    function openAlexa() {
+      if (!currentAsin) {
+        alert('Analyze a product first.');
+        return;
+      }
+      document.getElementById('alexaModal').classList.add('open');
+    }
+    function closeAlexa() {
+      document.getElementById('alexaModal').classList.remove('open');
+    }
+    function closeAlexaBackdrop(e) {
+      if (e.target === document.getElementById('alexaModal')) closeAlexa();
+    }
+    function copyPhrase() {
+      const text = document.getElementById('alexaPhrase').textContent.replace(/[“”]/g, '');
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = event.target;
+        const prev = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = prev; }, 1500);
+      });
+    }
+    function tryAlexaApp() {
+      // Deep link attempts — works when Alexa app is installed
+      // Skill invocation isn't universally linkable pre-publish; this opens Alexa
+      const phrase = encodeURIComponent(
+        document.getElementById('alexaPhrase').textContent.replace(/[“”]/g, '')
+      );
+      // Try Alexa app schemes (best-effort)
+      window.location.href = 'https://alexa.amazon.com/';
+      // Fallback note is already in the modal
+    }
+
+    async function onSpacePhoto(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      if (!currentAsin) {
+        alert('Analyze a product first, then scan your space.');
+        event.target.value = '';
+        return;
+      }
+
+      const preview = document.getElementById('scanPreview');
+      const img = document.getElementById('scanPreviewImg');
+      img.src = URL.createObjectURL(file);
+      preview.style.display = 'block';
+
+      const status = document.getElementById('scanStatus');
+      status.textContent = 'Analyzing your space with vision…';
+      status.classList.add('active');
+      document.getElementById('scanResultBox').style.display = 'none';
+
+      const form = new FormData();
+      form.append('file', file);
+      form.append('asin', currentAsin);
+      const hint = document.getElementById('fitQuestion').value.trim();
+      if (hint) form.append('hint', hint);
+
+      try {
+        const res = await fetch('/scan', { method: 'POST', body: form });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Scan failed');
+        }
+        const data = await res.json();
+        status.classList.remove('active');
+
+        const spoken = data.spoken_summary || 'Scan complete.';
+        document.getElementById('scanResultText').textContent = spoken;
+        const metrics = [];
+        if (data.space_type) metrics.push('Type: ' + data.space_type);
+        if (data.estimated_clearance_height_cm != null) metrics.push('Height ~ ' + data.estimated_clearance_height_cm + ' cm');
+        if (data.estimated_clearance_width_cm != null) metrics.push('Width ~ ' + data.estimated_clearance_width_cm + ' cm');
+        if (data.estimated_depth_cm != null) metrics.push('Depth ~ ' + data.estimated_depth_cm + ' cm');
+        if (data.fit_verdict) metrics.push('Fit: ' + String(data.fit_verdict).replace(/_/g, ' '));
+        if (data.confidence) metrics.push('Confidence: ' + data.confidence);
+        if (data.engine) metrics.push('Engine: ' + data.engine);
+        document.getElementById('scanMetrics').innerHTML = metrics.map(m => '<span class="metric">' + m + '</span>').join('');
+        document.getElementById('scanResultBox').style.display = 'block';
+
+        document.getElementById('fitResultText').textContent = spoken + (data.advice ? ' ' + data.advice : '');
+        document.getElementById('fitResult').style.display = 'block';
+        lastSpoken = spoken;
+      } catch (e) {
+        status.textContent = e.message || 'Scan failed';
+        status.classList.add('active');
       }
     }
 
@@ -796,6 +1139,8 @@ def demo_ui():
 </html>
     """
     return HTMLResponse(content=html)
+
+
 
 if __name__ == "__main__":
     import uvicorn
