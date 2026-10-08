@@ -1,20 +1,23 @@
-FROM python:3.12-slim
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+# AWS Lambda Web Adapter: lets the unchanged FastAPI app run on Lambda.
+# Pin a released tag (https://github.com/awslabs/aws-lambda-web-adapter/releases).
+ARG LWA_VERSION=0.9.1
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:${LWA_VERSION} /lambda-adapter /opt/extensions/lambda-adapter
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
+    AWS_LWA_PORT=8000 \
+    AWS_LWA_READINESS_CHECK_PATH=/health \
     RETURNKILLER_USE_BEDROCK=1
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY analyzer.py app.py ./
-# sample data: try local file, data/, or parent data/
-COPY sample_products.json* ./
-RUN mkdir -p data && \
-    (cp sample_products.json data/sample_products.json 2>/dev/null || true)
+COPY analyzer.py app.py sample_products.json ./
 
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

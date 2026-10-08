@@ -50,8 +50,9 @@ class ReturnKillerAnalyzer:
     description accuracy and size/fit issues.
     """
 
-    def __init__(self, use_bedrock: bool = False, region: str = "us-east-1"):
+    def __init__(self, use_bedrock: bool = False, region: Optional[str] = None):
         self.use_bedrock = use_bedrock
+        region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
         self.region = region
         self.bedrock_client = None
         
@@ -67,6 +68,37 @@ class ReturnKillerAnalyzer:
                 print(f"⚠ Could not initialize Bedrock: {e}")
                 print("  Falling back to simulated analysis")
                 self.use_bedrock = False
+
+    @staticmethod
+    def _model_ids() -> List[str]:
+        """Nova 2 Lite first (override with RETURNKILLER_MODEL_ID), then fall back."""
+        ids = []
+        override = os.environ.get("RETURNKILLER_MODEL_ID")
+        if override:
+            ids.append(override)
+        ids += [
+            "us.amazon.nova-2-lite-v1:0",
+            "global.amazon.nova-2-lite-v1:0",
+            "amazon.nova-2-lite-v1:0",
+        ]
+        return list(dict.fromkeys(ids))
+
+    def health_check(self) -> Dict[str, Any]:
+        """Make a tiny real Bedrock call so a missing permission shows up immediately."""
+        if not self.use_bedrock or not self.bedrock_client:
+            return {"bedrock": "disabled", "ok": True}
+        last_err = None
+        for model_id in self._model_ids():
+            try:
+                self.bedrock_client.converse(
+                    modelId=model_id,
+                    messages=[{"role": "user", "content": [{"text": "Reply with the word ok."}]}],
+                    inferenceConfig={"maxTokens": 10, "temperature": 0},
+                )
+                return {"bedrock": "ok", "model_id": model_id, "region": self.region, "ok": True}
+            except Exception as e:
+                last_err = e
+        return {"bedrock": "error", "error": str(last_err)[:300], "region": self.region, "ok": False}
 
     def analyze_product(self, product: Dict[str, Any]) -> AnalysisResult:
         """Main entry point - analyze a product and return insights."""
@@ -148,13 +180,7 @@ Rules:
 - spoken_summary must be natural speech, no JSON.
 """
 
-        # Prefer Nova Lite / Pro multimodal understanding models
-        model_ids = [
-            "us.amazon.nova-lite-v1:0",
-            "amazon.nova-lite-v1:0",
-            "us.amazon.nova-pro-v1:0",
-            "amazon.nova-pro-v1:0",
-        ]
+        model_ids = self._model_ids()
 
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         last_err = None
