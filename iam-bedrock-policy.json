@@ -9,10 +9,9 @@
         "bedrock:InvokeModelWithResponseStream"
       ],
       "Resource": [
-        "arn:aws:bedrock:*::foundation-model/amazon.nova-lite*",
-        "arn:aws:bedrock:*::foundation-model/amazon.nova-pro*",
-        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-lite*",
-        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-pro*"
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/global.amazon.nova-2-lite-v1:0"
       ]
     }
   ]

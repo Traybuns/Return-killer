@@ -3,11 +3,12 @@ ReturnKiller API
 Simple FastAPI server that exposes the analysis engine.
 """
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import hmac
 import json
 import os
 
@@ -19,10 +20,13 @@ app = FastAPI(
     version="0.1.0"
 )
 
+# CORS_ORIGINS is a comma-separated list (set by Terraform to the CloudFront URL).
+# Default "*" keeps local dev working; credentials are only allowed with explicit origins.
+_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials=_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,8 +35,81 @@ app.add_middleware(
 _use_bedrock = os.environ.get("RETURNKILLER_USE_BEDROCK", "").lower() in ("1", "true", "yes")
 analyzer = ReturnKillerAnalyzer(use_bedrock=_use_bedrock)
 
-# In-memory cache of analyses
-analysis_cache: Dict[str, Any] = {}
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Lambda request payloads cap at 6 MB
+
+# When deployed, CloudFront (and its WAF) must be the only way in. Terraform sets
+# ORIGIN_VERIFY and CloudFront sends it as a header; direct API Gateway hits are rejected.
+_origin_verify = os.environ.get("ORIGIN_VERIFY")
+
+
+@app.middleware("http")
+async def require_cloudfront(request: Request, call_next):
+    if _origin_verify:
+        # Shallow /health is exempt so the Lambda Web Adapter readiness check can reach it.
+        is_shallow_health = request.url.path == "/health" and request.query_params.get("deep") != "true"
+        if not is_shallow_health and not hmac.compare_digest(
+            request.headers.get("x-origin-verify", ""), _origin_verify
+        ):
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+    return await call_next(request)
+
+
+class AnalysisCache:
+    """DynamoDB-backed cache when CACHE_TABLE is set, in-memory dict otherwise.
+
+    Lambda containers are ephemeral, so an in-memory dict alone loses data between
+    invocations. Dict-style access keeps the rest of the code unchanged.
+    """
+
+    def __init__(self):
+        self._mem: Dict[str, Any] = {}
+        self._table = None
+        table_name = os.environ.get("CACHE_TABLE")
+        if table_name:
+            try:
+                import boto3
+                self._table = boto3.resource("dynamodb").Table(table_name)
+            except Exception as e:
+                print(f"⚠ DynamoDB cache unavailable, using memory: {e}")
+
+    def __contains__(self, key: str) -> bool:
+        return self.get(key) is not None
+
+    def __getitem__(self, key: str) -> Any:
+        value = self.get(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._mem[key] = value
+        if self._table:
+            try:
+                import time
+                self._table.put_item(Item={
+                    "pk": f"analysis#{key}",
+                    "payload": json.dumps(value),
+                    "expires_at": int(time.time()) + 7 * 24 * 3600,
+                })
+            except Exception as e:
+                print(f"⚠ cache write failed: {e}")
+
+    def get(self, key: str) -> Optional[Any]:
+        if key in self._mem:
+            return self._mem[key]
+        if self._table:
+            try:
+                item = self._table.get_item(Key={"pk": f"analysis#{key}"}).get("Item")
+                if item:
+                    value = json.loads(item["payload"])
+                    self._mem[key] = value
+                    return value
+            except Exception as e:
+                print(f"⚠ cache read failed: {e}")
+        return None
+
+
+analysis_cache = AnalysisCache()
 
 
 class AnalyzeRequest(BaseModel):
@@ -62,6 +139,15 @@ def root():
             "GET /demo": "Interactive demo UI"
         }
     }
+
+
+@app.get("/health")
+def health(deep: bool = False):
+    """Liveness by default; ?deep=true makes a real Bedrock call to prove permissions work."""
+    result: Dict[str, Any] = {"status": "ok", "bedrock_enabled": _use_bedrock}
+    if deep:
+        result.update(analyzer.health_check())
+    return result
 
 
 @app.get("/products")
@@ -167,8 +253,8 @@ async def scan_space(
         raise HTTPException(status_code=400, detail="Please upload an image file")
 
     image_bytes = await file.read()
-    if len(image_bytes) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image too large (max 8MB)")
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
     if len(image_bytes) < 100:
         raise HTTPException(status_code=400, detail="Image file is empty")
 
