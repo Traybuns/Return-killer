@@ -45,6 +45,11 @@ class AnalysisResult:
     engine: str = "simulated"  # "bedrock" or "simulated" (offline keyword engine)
     model_id: Optional[str] = None
     fallback_reason: Optional[str] = None
+    # "return_reasons": computed from real return data (only the demo samples have it).
+    # "review_text_proxy": Amazon does not publish return reasons, so the score is an index
+    # built from how many low-star reviews cite a size/fit/description mismatch.
+    risk_basis: str = "return_reasons"
+    reviews_analyzed: int = 0
 
 
 class ReturnKillerAnalyzer:
@@ -368,8 +373,10 @@ Rules:
         size_issues = self._detect_size_issues(reviews, dimensions, title)
         
         # Calculate risk score
-        risk_score = self._calculate_risk_score(return_reasons, complaints, size_issues)
-        
+        risk_score = self._calculate_risk_score(
+            return_reasons, complaints, size_issues, product.get("review_stats")
+        )
+
         # Generate improved content
         improved_bullets = self._generate_improved_bullets(bullets, complaints, size_issues, dimensions)
         improved_title = self._improve_title(title, size_issues, dimensions)
@@ -396,7 +403,9 @@ Rules:
             alexa_fit_response=alexa_response,
             visual_suggestions=visual_suggestions,
             summary=summary,
-            analyzed_at=datetime.now(timezone.utc).isoformat()
+            analyzed_at=datetime.now(timezone.utc).isoformat(),
+            risk_basis="review_text_proxy" if self._uses_review_proxy(product) else "return_reasons",
+            reviews_analyzed=len(reviews),
         )
 
     def _extract_complaints(self, reviews: List[Dict]) -> List[ComplaintInsight]:
@@ -502,25 +511,52 @@ Rules:
         
         return issues
 
-    def _calculate_risk_score(self, return_reasons: Dict, complaints: List, size_issues: List) -> float:
-        """Calculate a 0-100 return risk score focused on description/size issues."""
+    # Reviews of the product's own review_stats must cover at least this many reviews
+    # before the proxy is trusted; below that the score would be noise.
+    MIN_REVIEWS_FOR_PROXY = 20
+
+    @classmethod
+    def _uses_review_proxy(cls, product: Dict[str, Any]) -> bool:
+        stats = product.get("review_stats") or {}
+        return not product.get("return_reasons") and stats.get("seen", 0) >= cls.MIN_REVIEWS_FOR_PROXY
+
+    def _calculate_risk_score(
+        self,
+        return_reasons: Dict,
+        complaints: List,
+        size_issues: List,
+        review_stats: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        """Calculate a 0-100 return risk score focused on description/size issues.
+
+        With real return data (demo samples) the mix of return reasons drives the score.
+        Real Amazon data has none, so with `review_stats` the score is an index from the share
+        of reviews that are low-star AND cite a size/fit/description mismatch.
+        """
+        if review_stats and not return_reasons and review_stats.get("seen", 0) >= self.MIN_REVIEWS_FOR_PROXY:
+            rate = review_stats.get("mismatch_low", 0) / review_stats["seen"]
+            score = 15.0 + min(rate * 500, 50)
+            score += min(len(complaints) * 5, 20)
+            score += sum(1 for i in size_issues if i.severity == "high") * 5
+            return min(round(score, 1), 100.0)
+
         score = 20.0  # baseline
-        
+
         # Return reason weighting
         not_as_desc = return_reasons.get("not_as_described", 0)
         wrong_size = return_reasons.get("wrong_size", 0)
         total_returns = sum(return_reasons.values()) or 1
-        
+
         desc_ratio = (not_as_desc + wrong_size) / total_returns
         score += desc_ratio * 40
-        
+
         # Complaint frequency
         score += min(len(complaints) * 8, 25)
-        
+
         # Size issues
         high_severity = sum(1 for i in size_issues if i.severity == "high")
         score += high_severity * 7
-        
+
         return min(round(score, 1), 100.0)
 
     def _generate_improved_bullets(
@@ -881,7 +917,9 @@ Rules:
         bullets += [b for b in nova_bullets if b not in bullets]
         bullets = bullets[:5]
 
-        risk = self._calculate_risk_score(product.get("return_reasons", {}), complaints, issues)
+        risk = self._calculate_risk_score(
+            product.get("return_reasons", {}), complaints, issues, product.get("review_stats")
+        )
         return AnalysisResult(
             asin=product.get("asin", "UNKNOWN"),
             title=title,
@@ -897,6 +935,8 @@ Rules:
             analyzed_at=datetime.now(timezone.utc).isoformat(),
             engine="bedrock",
             model_id=model_id,
+            risk_basis="review_text_proxy" if self._uses_review_proxy(product) else "return_reasons",
+            reviews_analyzed=min(len(product.get("reviews") or []), 40),  # the prompt reads the first 40
         )
 
     def to_dict(self, result: AnalysisResult) -> Dict:
@@ -905,6 +945,8 @@ Rules:
             "engine": result.engine,
             "model_id": result.model_id,
             "fallback_reason": result.fallback_reason,
+            "risk_basis": result.risk_basis,
+            "reviews_analyzed": result.reviews_analyzed,
             "asin": result.asin,
             "title": result.title,
             "return_risk_score": result.return_risk_score,

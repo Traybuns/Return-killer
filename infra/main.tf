@@ -330,12 +330,22 @@ resource "aws_cloudfront_origin_access_control" "ui" {
   signing_protocol                  = "sigv4"
 }
 
+# AWS managed CloudFront policies, looked up by their published names rather than
+# hardcoded IDs (a wrong ID fails at apply time with NoSuchCachePolicy).
+data "aws_cloudfront_cache_policy" "disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_cache_policy" "optimized" {
+  name = "Managed-CachingOptimized"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
 locals {
-  # AWS managed policy IDs.
-  cache_disabled           = "4135ea2d-6df8-4a3a-bf75-d4fab3b3e300"
-  cache_optimized          = "658327ea-f89d-4fab-a63d-7bd8c3dcf3ca"
-  all_viewer_except_host   = "b689b0a8-53d0-43f2-b7d1-0d7ed1eaf5c2"
-  api_origin_domain        = replace(aws_apigatewayv2_api.http.api_endpoint, "https://", "")
+  api_origin_domain = replace(aws_apigatewayv2_api.http.api_endpoint, "https://", "")
 }
 
 resource "aws_cloudfront_distribution" "main" {
@@ -375,8 +385,8 @@ resource "aws_cloudfront_distribution" "main" {
     viewer_protocol_policy   = "redirect-to-https"
     allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
     cached_methods           = ["GET", "HEAD"]
-    cache_policy_id          = local.cache_disabled
-    origin_request_policy_id = local.all_viewer_except_host
+    cache_policy_id          = data.aws_cloudfront_cache_policy.disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
     compress                 = true
   }
 
@@ -386,7 +396,7 @@ resource "aws_cloudfront_distribution" "main" {
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
-    cache_policy_id        = local.cache_optimized
+    cache_policy_id        = data.aws_cloudfront_cache_policy.optimized.id
     compress               = true
   }
 

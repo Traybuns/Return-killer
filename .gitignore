@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+
+# real catalog built by scripts/ingest_amazon_reviews.py (not committed)
+data/*.json
+!data/.gitkeep

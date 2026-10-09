@@ -77,7 +77,7 @@ def test_mcp_handshake_and_tools(client):
                                       "clientInfo": {"name": "t", "version": "1"}}).json()
     assert init["result"]["serverInfo"]["name"] == "ReturnKiller"
     tools = rpc(client, "tools/list").json()["result"]["tools"]
-    assert {t["name"] for t in tools} == {"list_products", "check_fit", "analyze_listing"}
+    assert {t["name"] for t in tools} == {"list_products", "search_products", "check_fit", "analyze_listing"}
     assert all(t["annotations"]["readOnlyHint"] for t in tools)
 
 
