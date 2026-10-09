@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReturnKiller on Alexa+ (simulator)</title>
+<style>
+  :root {
+    --bg:#070a0f; --panel:#0f141c; --panel-2:#151c27; --line:rgba(255,255,255,.1);
+    --text:#f1f4f8; --muted:#8c98a8; --alexa:#00b0ff; --alexa-2:#0066ff; --accent:#ff9900;
+    --good:#00e5a0; --warn:#ffb020; --bad:#ff5c6c;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; line-height:1.5; }
+  .wrap { max-width:1100px; margin:0 auto; padding:24px 16px 48px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  h1 { font-size:1.25rem; font-weight:700; letter-spacing:-.01em; }
+  h1 span { color:var(--accent); }
+  .sub { color:var(--muted); font-size:.85rem; margin-bottom:18px; max-width:760px; }
+  .toggle { display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--muted); cursor:pointer; user-select:none; }
+  .grid { display:grid; grid-template-columns:1.15fr .85fr; gap:16px; }
+  @media (max-width:860px){ .grid { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; }
+  .panel h2 { font-size:.72rem; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); margin-bottom:12px; font-weight:600; }
+  #chat { height:380px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding-right:4px; }
+  .msg { max-width:88%; padding:10px 14px; border-radius:14px; font-size:.95rem; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:var(--panel-2); border:1px solid var(--line); }
+  .msg.alexa { align-self:flex-start; background:linear-gradient(135deg,rgba(0,176,255,.18),rgba(0,102,255,.18)); border:1px solid rgba(0,176,255,.35); }
+  .msg .who { display:block; font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; color:var(--alexa); margin-bottom:2px; font-weight:700; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+  .chip { background:var(--panel-2); border:1px solid var(--line); color:var(--text); border-radius:999px; padding:7px 12px; font-size:.8rem; cursor:pointer; font-family:inherit; }
+  .chip:hover { border-color:var(--alexa); }
+  .row { display:flex; gap:8px; }
+  input[type=text] { flex:1; background:var(--panel-2); border:1px solid var(--line); border-radius:999px; color:var(--text); padding:11px 16px; font-size:.95rem; font-family:inherit; }
+  input[type=text]:focus { outline:none; border-color:var(--alexa); }
+  button.send, button.mic { border:none; border-radius:999px; padding:0 18px; font-weight:700; font-family:inherit; cursor:pointer; color:#fff; background:linear-gradient(135deg,var(--alexa),var(--alexa-2)); }
+  button.mic { width:46px; padding:0; display:grid; place-items:center; }
+  button.mic.live { background:var(--bad); animation:pulse 1s infinite; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  @keyframes pulse { 50% { opacity:.6; } }
+  .card { background:var(--panel-2); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card:empty { display:none; }
+  .badge { display:inline-block; font-size:.7rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 10px; border-radius:999px; }
+  .good { background:rgba(0,229,160,.14); color:var(--good); } .warn { background:rgba(255,176,32,.15); color:var(--warn); } .bad { background:rgba(255,92,108,.15); color:var(--bad); } .neutral { background:rgba(255,255,255,.07); color:var(--muted); }
+  .big { font-size:2.4rem; font-weight:800; line-height:1; margin:8px 0; }
+  .bar { position:relative; height:10px; border-radius:6px; background:rgba(255,255,255,.08); margin:10px 0 4px; }
+  .bar i { position:absolute; top:0; bottom:0; left:0; border-radius:6px; }
+  .small { font-size:.8rem; color:var(--muted); }
+  ul.plain { list-style:none; margin-top:8px; } ul.plain li { font-size:.85rem; padding:5px 0; border-top:1px solid var(--line); }
+  #log { max-height:300px; overflow-y:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.72rem; color:var(--muted); }
+  #log details { border-top:1px solid var(--line); padding:6px 0; }
+  #log summary { cursor:pointer; color:var(--text); }
+  #log pre { white-space:pre-wrap; word-break:break-word; margin-top:6px; }
+  footer { margin-top:18px; color:var(--muted); font-size:.78rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span>Return</span>Killer <span style="color:var(--alexa)">on Alexa+</span></h1>
+    <label class="toggle"><input type="checkbox" id="speak" checked> Speak answers aloud</label>
+  </header>
+  <p class="sub">Simulated Alexa+ for builders without a device. Every answer below comes from a real MCP tool call to this server's <code>/mcp</code> endpoint (shown on the right). The intent router that picks the tool is a simple stand-in for the Alexa+ model.</p>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Conversation</h2>
+      <div id="chat" aria-live="polite"></div>
+      <div class="chips" id="chips"></div>
+      <form class="row" id="form">
+        <button type="button" class="mic" id="mic" title="Speak" aria-label="Speak">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+        </button>
+        <input type="text" id="input" placeholder="Alexa, ask Return Killer if the air fryer fits under my 40 cm cabinet" autocomplete="off">
+        <button class="send" type="submit" id="send">Ask</button>
+      </form>
+    </section>
+
+    <aside>
+      <section class="panel" style="margin-bottom:16px">
+        <h2>Screen (Echo Show style)</h2>
+        <div id="screen"><p class="small">Ask a question to see the visual answer here.</p></div>
+      </section>
+      <section class="panel">
+        <h2>MCP tool calls</h2>
+        <div id="log"><p class="small">Waiting for the first call&hellip;</p></div>
+      </section>
+    </aside>
+  </div>
+  <footer>Tools: <span id="toolnames">loading&hellip;</span></footer>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const chat = $('chat'), screen = $('screen'), logEl = $('log');
+  let rpcId = 0, products = [], lastAsin = null, pendingFit = false, initialized = false;
+
+  // ---- minimal MCP client (Streamable HTTP, stateless, JSON responses) ----
+  async function rpc(method, params, notify) {
+    const body = notify ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: ++rpcId, method, params };
+    const res = await fetch('/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+      body: JSON.stringify(body),
+    });
+    if (notify) return null;
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); }
+    catch { // tolerate an SSE-framed reply
+      const line = text.split('\n').find(l => l.startsWith('data:'));
+      json = line ? JSON.parse(line.slice(5)) : { error: { message: 'Unreadable response (HTTP ' + res.status + ')' } };
+    }
+    return json;
+  }
+
+  async function ensureInit() {
+    if (initialized) return;
+    await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'alexa-plus-simulator', version: '0.1' } });
+    await rpc('notifications/initialized', {}, true);
+    initialized = true;
+  }
+
+  function logCall(name, args, response, ms) {
+    if (logEl.querySelector('p')) logEl.innerHTML = '';
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = `${name}(${Object.keys(args || {}).length ? JSON.stringify(args) : ''})  ${ms}ms`;
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(response, null, 2);
+    d.append(s, pre);
+    logEl.prepend(d);
+  }
+
+  async function callTool(name, args = {}) {
+    await ensureInit();
+    const t0 = performance.now();
+    const resp = await rpc('tools/call', { name, arguments: args });
+    logCall(name, args, resp, Math.round(performance.now() - t0));
+    if (resp.error) throw new Error(resp.error.message || 'MCP error');
+    const r = resp.result || {};
+    if (r.isError) throw new Error((r.content && r.content[0] && r.content[0].text) || 'Tool error');
+    // The server wraps dict results as {result: {...}} in structuredContent; unwrap it.
+    const sc = r.structuredContent;
+    if (sc) return (sc.result && typeof sc.result === 'object' && Object.keys(sc).length === 1) ? sc.result : sc;
+    const txt = (r.content || []).find(c => c.type === 'text');
+    return txt ? JSON.parse(txt.text) : {};
+  }
+
+  // ---- conversation helpers ----
+  function addMsg(who, text) {
+    const m = document.createElement('div');
+    m.className = 'msg ' + who;
+    if (who === 'alexa') { const w = document.createElement('span'); w.className = 'who'; w.textContent = 'Alexa'; m.append(w); }
+    m.append(document.createTextNode(text));
+    chat.append(m);
+    chat.scrollTop = chat.scrollHeight;
+  }
+  function speak(text) {
+    if (!$('speak').checked || !('speechSynthesis' in window)) return;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  }
+  function say(text) { addMsg('alexa', text); speak(text); }
+
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  // ---- visual answers ----
+  const VERDICT = {
+    likely_fits: ['Likely fits', 'good', '#00e5a0'], tight: ['Tight fit', 'warn', '#ffb020'],
+    unlikely: ['Unlikely to fit', 'bad', '#ff5c6c'], need_measurement: ['Need a measurement', 'neutral', '#8c98a8'], unknown: ['Unknown', 'neutral', '#8c98a8'],
+  };
+  function showFit(r, title) {
+    const [label, cls, color] = VERDICT[r.verdict] || VERDICT.unknown;
+    const c = el('div', 'card');
+    c.append(el('div', 'small', title), el('span', 'badge ' + cls, label));
+    if (r.product_height_cm != null && r.clearance_cm != null) {
+      const max = Math.max(r.product_height_cm, r.clearance_cm) * 1.15;
+      const bar = el('div', 'bar'); const fill = el('i'); fill.style.width = (r.product_height_cm / max * 100) + '%'; fill.style.background = color; bar.append(fill);
+      c.append(bar, el('div', 'small', `Product height ${r.product_height_cm} cm  |  your clearance ${r.clearance_cm} cm`));
+    } else if (r.product_height_cm != null) {
+      c.append(el('div', 'small', `Product height ${r.product_height_cm} cm`));
+    }
+    screen.replaceChildren(c);
+  }
+  function showRisk(r) {
+    const cls = r.risk_level === 'high' ? 'bad' : r.risk_level === 'medium' ? 'warn' : 'good';
+    const c = el('div', 'card');
+    c.append(el('div', 'small', r.title), el('div', 'big', String(Math.round(r.return_risk_score))), el('span', 'badge ' + cls, r.risk_level + ' return risk'));
+    const ul = el('ul', 'plain');
+    (r.top_complaints || []).forEach(t => ul.append(el('li', '', `${t.theme}: ${t.mentions} mention${t.mentions === 1 ? '' : 's'}`)));
+    if (ul.children.length) c.append(ul);
+    c.append(el('div', 'small', 'Analysis engine: ' + (r.engine || 'n/a')));
+    screen.replaceChildren(c);
+  }
+  function showList(items) {
+    const c = el('div', 'card'); const ul = el('ul', 'plain');
+    items.forEach(p => ul.append(el('li', '', p.title)));
+    c.append(el('div', 'small', 'Products I can check'), ul);
+    screen.replaceChildren(c);
+  }
+
+  // ---- stand-in intent router (Alexa+ would supply this) ----
+  const MEASURE = /\d+(\.\d+)?\s*(cm|centimet|mm|inch|in\b|"|ft|feet|m\b)/i;
+  function findProduct(u) {
+    const text = u.toLowerCase();
+    let best = null, bestScore = 0;
+    for (const p of products) {
+      const words = p.title.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
+      const score = words.filter(w => text.includes(w)).length;
+      if (score > bestScore) { best = p; bestScore = score; }
+    }
+    return best;
+  }
+
+  async function handle(utterance) {
+    addMsg('user', utterance);
+    const u = utterance.toLowerCase();
+    try {
+      const mentioned = findProduct(u);
+      if (mentioned) lastAsin = mentioned.asin;
+
+      if (/what can you|which products|list|what products|what do you/.test(u)) {
+        const r = await callTool('list_products'); showList(r.products); say(r.spoken); return;
+      }
+      const wantsFit = /fit|under|cabinet|clearance|space|shelf|tall|height/.test(u) || (pendingFit && MEASURE.test(u));
+      const wantsRisk = /risk|return|safe|worth|review|complain|problem|buy/.test(u);
+
+      if (!lastAsin && (wantsFit || wantsRisk)) {
+        say('Which product? ' + products.map(p => p.title.split(' - ')[0]).join(', or ') + '.'); return;
+      }
+      if (wantsFit) {
+        const r = await callTool('check_fit', { asin: lastAsin, space_description: utterance });
+        pendingFit = r.verdict === 'need_measurement';
+        const p = products.find(x => x.asin === lastAsin);
+        showFit(r, p ? p.title : lastAsin); say(r.spoken); return;
+      }
+      if (wantsRisk) {
+        const r = await callTool('analyze_listing', { asin: lastAsin });
+        pendingFit = false; showRisk(r); say(r.spoken); return;
+      }
+      say('I can check whether a product will fit your space, or tell you how likely it is to be returned. Try: will the air fryer fit under my 40 centimeter cabinet?');
+    } catch (e) {
+      say('Sorry, I could not reach ReturnKiller. ' + e.message);
+    }
+  }
+
+  // ---- wiring ----
+  $('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = $('input').value.trim(); if (!v) return;
+    $('input').value = ''; handle(v);
+  });
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    const rec = new SR(); rec.lang = 'en-US'; rec.interimResults = false;
+    rec.onresult = (ev) => { const t = ev.results[0][0].transcript; handle(t); };
+    rec.onend = () => $('mic').classList.remove('live');
+    rec.onerror = () => $('mic').classList.remove('live');
+    $('mic').addEventListener('click', () => { speechSynthesis.cancel(); $('mic').classList.add('live'); rec.start(); });
+  } else {
+    $('mic').disabled = true; $('mic').title = 'Voice input is not supported in this browser';
+  }
+
+  async function boot() {
+    try {
+      await ensureInit();
+      const tools = await rpc('tools/list', {});
+      $('toolnames').textContent = ((tools.result && tools.result.tools) || []).map(t => t.name).join(', ') || 'none';
+      const r = await callTool('list_products');
+      products = r.products || [];
+      const ex = products.length > 1 ? products : [];
+      const chips = [
+        'What can you check?',
+        'Will the air fryer fit under my 40 cm cabinet?',
+        'Will the air fryer fit under 15 inches?',
+        'How risky is the cutting board?',
+        'Will the cutting board fit under a 5 cm gap?',
+      ];
+      chips.forEach(t => { const b = el('button', 'chip', t); b.type = 'button'; b.onclick = () => handle(t); $('chips').append(b); });
+      say('Hi, this is ReturnKiller. Tell me about a product and your space, and I will tell you if it will fit before you order.');
+    } catch (e) {
+      $('toolnames').textContent = 'unreachable';
+      say('I could not connect to the ReturnKiller MCP server. ' + e.message);
+    }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
