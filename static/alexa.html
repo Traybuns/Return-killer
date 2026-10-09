@@ -196,7 +196,7 @@
   }
   function showList(items) {
     const c = el('div', 'card'); const ul = el('ul', 'plain');
-    items.forEach(p => ul.append(el('li', '', p.title)));
+    items.forEach(p => ul.append(el('li', '', p.short_title || p.title)));
     c.append(el('div', 'small', 'Products I can check'), ul);
     screen.replaceChildren(c);
   }
@@ -207,18 +207,31 @@
     const text = u.toLowerCase();
     let best = null, bestScore = 0;
     for (const p of products) {
-      const words = p.title.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
+      const words = (p.short_title || p.title).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 3);
       const score = words.filter(w => text.includes(w)).length;
       if (score > bestScore) { best = p; bestScore = score; }
     }
     return best;
   }
 
+  const FILLER = /\b(will|would|does|do|can|could|the|a|an|my|me|it|is|are|fit|fits|under|over|in|on|cabinet|clearance|space|shelf|tall|height|how|risky|risk|return|returned|safe|worth|buying|buy|review|reviews|complain|problem|check|find|search|for|about|tell|whether|should|i|of|to|inches|inch|cm|centimeter|centimeters|feet|\d+(\.\d+)?)\b/g;
+  async function lookup(u) {
+    // Not in the loaded shortlist: ask the server's catalog search.
+    const q = u.replace(FILLER, ' ').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!q) return null;
+    const r = await callTool('search_products', { query: q, limit: 3 });
+    const top = (r.products || [])[0];
+    if (top && !products.some(p => p.asin === top.asin)) products.push(top);
+    return top || null;
+  }
+
   async function handle(utterance) {
     addMsg('user', utterance);
     const u = utterance.toLowerCase();
     try {
-      const mentioned = findProduct(u);
+      let mentioned = findProduct(u);
+      const generic = /what can you|which products|list|what products|what do you/.test(u);
+      if (!mentioned && !generic) mentioned = await lookup(u);
       if (mentioned) lastAsin = mentioned.asin;
 
       if (/what can you|which products|list|what products|what do you/.test(u)) {
@@ -228,13 +241,13 @@
       const wantsRisk = /risk|return|safe|worth|review|complain|problem|buy/.test(u);
 
       if (!lastAsin && (wantsFit || wantsRisk)) {
-        say('Which product? ' + products.map(p => p.title.split(' - ')[0]).join(', or ') + '.'); return;
+        say('Which product? Name it, for example: ' + products.slice(0, 3).map(p => p.short_title).join(', or ') + '.'); return;
       }
       if (wantsFit) {
         const r = await callTool('check_fit', { asin: lastAsin, space_description: utterance });
         pendingFit = r.verdict === 'need_measurement';
         const p = products.find(x => x.asin === lastAsin);
-        showFit(r, p ? p.title : lastAsin); say(r.spoken); return;
+        showFit(r, p ? (p.short_title || p.title) : lastAsin); say(r.spoken); return;
       }
       if (wantsRisk) {
         const r = await callTool('analyze_listing', { asin: lastAsin });

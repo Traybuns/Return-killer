@@ -14,7 +14,8 @@ import os
 
 from contextlib import asynccontextmanager
 
-from analyzer import ReturnKillerAnalyzer, load_sample_products, fit_check
+from analyzer import ReturnKillerAnalyzer, fit_check
+from catalog import get_product, search_products, catalog_info
 from mcp_server import build_mcp
 
 
@@ -125,15 +126,7 @@ analysis_cache = AnalysisCache()
 
 
 def _find_product(asin: str) -> Optional[Dict[str, Any]]:
-    return next((p for p in load_sample_products() if p["asin"] == asin), None)
-
-
-def _list_products() -> List[Dict[str, Any]]:
-    return [
-        {"asin": p["asin"], "title": p["title"], "category": p.get("category"),
-         "review_count": len(p.get("reviews", []))}
-        for p in load_sample_products()
-    ]
+    return get_product(asin)
 
 
 def _get_analysis(asin: str) -> Optional[Dict[str, Any]]:
@@ -144,7 +137,10 @@ def _get_analysis(asin: str) -> Optional[Dict[str, Any]]:
     if not product:
         return None
     analysis = analyzer.to_dict(analyzer.analyze_product(product))
-    analysis_cache[asin] = analysis
+    # Don't pin a degraded answer: if Bedrock failed, the offline result must not be served
+    # for the next 7 days after Bedrock recovers.
+    if not analysis.get("fallback_reason"):
+        analysis_cache[asin] = analysis
     return analysis
 
 
@@ -166,9 +162,10 @@ def root():
         "version": "0.2.0",
         "status": "running",
         "bedrock_vision": _use_bedrock,
+        "catalog": catalog_info(),
         "endpoints": {
-            "GET /products": "List sample products",
-            "GET /analyze/{asin}": "Analyze a sample product by ASIN",
+            "GET /products": "Search or list products (?q=, ?limit=, ?offset=)",
+            "GET /analyze/{asin}": "Analyze a catalog product by ASIN",
             "POST /analyze": "Analyze a custom product payload",
             "POST /fit": "Ask a fit question (Alexa-style)",
             "POST /scan": "Scan a space photo (Bedrock Nova vision)",
@@ -187,30 +184,19 @@ def health(deep: bool = False):
 
 
 @app.get("/products")
-def list_products():
-    products = load_sample_products()
-    return {
-        "count": len(products),
-        "products": [
-            {
-                "asin": p["asin"],
-                "title": p["title"],
-                "category": p.get("category"),
-                "review_count": len(p.get("reviews", [])),
-            }
-            for p in products
-        ]
-    }
+def list_products(q: str = "", limit: int = 50, offset: int = 0):
+    """Search the catalog (token match on title/category) or list the most popular products."""
+    result = search_products(q, limit=limit, offset=offset)
+    return {"count": result["total"], "products": result["products"], "catalog": catalog_info()}
 
 
 @app.get("/analyze/{asin}")
 def analyze_by_asin(asin: str):
-    products = load_sample_products()
-    product = next((p for p in products if p["asin"] == asin), None)
-    
+    product = _find_product(asin)
+
     if not product:
-        raise HTTPException(status_code=404, detail=f"Product {asin} not found in sample data")
-    
+        raise HTTPException(status_code=404, detail=f"Product {asin} not found in the catalog")
+
     result = analyzer.analyze_product(product)
     result_dict = analyzer.to_dict(result)
     analysis_cache[asin] = result_dict
@@ -222,8 +208,7 @@ def analyze_custom(req: AnalyzeRequest):
     if req.product:
         product = req.product
     elif req.asin:
-        products = load_sample_products()
-        product = next((p for p in products if p["asin"] == req.asin), None)
+        product = _find_product(req.asin)
         if not product:
             raise HTTPException(status_code=404, detail="ASIN not found")
     else:
@@ -289,8 +274,7 @@ async def scan_space(
 
     product = None
     if asin:
-        products = load_sample_products()
-        product = next((p for p in products if p["asin"] == asin), None)
+        product = _find_product(asin)
 
     result = analyzer.scan_space(
         image_bytes=image_bytes,
@@ -466,6 +450,12 @@ def demo_ui():
       flex-wrap: wrap;
       justify-content: center;
     }
+    #productSearch {
+      flex: 1; min-width: 220px; max-width: 420px;
+      background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); color: var(--text);
+      padding: 12px 18px; border-radius: var(--radius-pill); font-size: 0.95rem; font-family: inherit;
+    }
+    #productSearch:focus { outline: none; border-color: rgba(255,153,0,0.5); box-shadow: 0 0 0 4px var(--accent-soft); }
     select {
       flex: 1;
       min-width: 220px;
@@ -929,7 +919,10 @@ def demo_ui():
     </section>
 
     <section class="glass picker">
-      <div class="picker-label">Choose a product</div>
+      <div class="picker-label">Search products <span id="catalogNote" style="opacity:.6"></span></div>
+      <div class="picker-row" style="margin-bottom:8px">
+        <input id="productSearch" type="search" placeholder="e.g. air fryer, cutting board, backpack" autocomplete="off" />
+      </div>
       <div class="picker-row">
         <select id="productSelect">
           <option value="">Loading products…</option>
@@ -1038,19 +1031,35 @@ def demo_ui():
     let currentTitle = "";
     let lastSpoken = "";
 
-    async function loadProducts() {
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, ch => (
+        {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+    }
+
+    let searchTimer = null;
+    async function loadProducts(q) {
+      const select = document.getElementById('productSelect');
       try {
-        const res = await fetch('/products');
+        const res = await fetch('/products?limit=50&q=' + encodeURIComponent(q || ''));
         const data = await res.json();
-        const select = document.getElementById('productSelect');
-        select.innerHTML = data.products.map(p =>
-          `<option value="${p.asin}">${p.title}</option>`
-        ).join('');
+        select.replaceChildren();
+        if (!data.products.length) {
+          select.append(new Option('No matches', ''));
+        }
+        data.products.forEach(p => select.append(new Option(p.short_title || p.title, p.asin)));
+        const c = data.catalog || {};
+        document.getElementById('catalogNote').textContent =
+          c.products ? '(' + c.products + ' products' + (c.source === 'sample' ? ', demo data' : '') + ')' : '';
       } catch (e) {
-        document.getElementById('productSelect').innerHTML =
-          '<option value="">Could not load products</option>';
+        select.replaceChildren(new Option('Could not load products', ''));
       }
     }
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('productSearch').addEventListener('input', (ev) => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => loadProducts(ev.target.value), 250);
+      });
+    });
 
     async function runAnalysis() {
       const asin = document.getElementById('productSelect').value;
@@ -1083,7 +1092,10 @@ def demo_ui():
 
         let summary = data.summary || '';
         summary = summary.replace(/^Return Risk:.*\\n\\n?/i, '');
-        document.getElementById('summary').textContent = summary.trim();
+        document.getElementById('summary').textContent = summary.trim() +
+          (data.risk_basis === 'review_text_proxy'
+            ? ' (Estimated from ' + (data.reviews_analyzed || 0) + ' review texts; Amazon does not publish return reasons.)'
+            : '');
 
         const complaintsEl = document.getElementById('complaints');
         if (!data.top_complaints || data.top_complaints.length === 0) {
@@ -1092,18 +1104,18 @@ def demo_ui():
           complaintsEl.innerHTML = data.top_complaints.map(c => `
             <div class="complaint">
               <div class="complaint-top">
-                <span class="complaint-theme">${c.theme}</span>
-                <span class="tag ${c.severity}">${c.severity}</span>
+                <span class="complaint-theme">${esc(c.theme)}</span>
+                <span class="tag ${esc(c.severity)}">${esc(c.severity)}</span>
                 <span class="tag neutral">${c.frequency} mention${c.frequency !== 1 ? 's' : ''}</span>
               </div>
-              <p class="complaint-fix">${c.suggested_fix}</p>
-              ${c.example_quotes && c.example_quotes[0] ? `<p class="complaint-quote">“${c.example_quotes[0]}”</p>` : ''}
+              <p class="complaint-fix">${esc(c.suggested_fix)}</p>
+              ${c.example_quotes && c.example_quotes[0] ? `<p class="complaint-quote">“${esc(c.example_quotes[0])}”</p>` : ''}
             </div>
           `).join('');
         }
 
         document.getElementById('bullets').innerHTML =
-          (data.improved_bullets || []).map(b => `<li>${b}</li>`).join('') ||
+          (data.improved_bullets || []).map(b => `<li>${esc(b)}</li>`).join('') ||
           '<li class="empty-state">No suggestions</li>';
 
         document.getElementById('sizeChart').textContent = data.size_chart_text || '—';
@@ -1111,7 +1123,7 @@ def demo_ui():
         document.getElementById('fitResult').style.display = 'none';
 
         document.getElementById('visuals').innerHTML =
-          (data.visual_suggestions || []).map(v => `<li>${v}</li>`).join('') ||
+          (data.visual_suggestions || []).map(v => `<li>${esc(v)}</li>`).join('') ||
           '<li class="empty-state">No suggestions</li>';
 
         // Update Alexa phrase with product context
@@ -1228,7 +1240,7 @@ def demo_ui():
         if (data.fit_verdict) metrics.push('Fit: ' + String(data.fit_verdict).replace(/_/g, ' '));
         if (data.confidence) metrics.push('Confidence: ' + data.confidence);
         if (data.engine) metrics.push('Engine: ' + data.engine);
-        document.getElementById('scanMetrics').innerHTML = metrics.map(m => '<span class="metric">' + m + '</span>').join('');
+        document.getElementById('scanMetrics').innerHTML = metrics.map(m => '<span class="metric">' + esc(m) + '</span>').join('');
         document.getElementById('scanResultBox').style.display = 'block';
 
         document.getElementById('fitResultText').textContent = spoken + (data.advice ? ' ' + data.advice : '');
@@ -1266,7 +1278,7 @@ def alexa_simulator():
 
 # ---- MCP server (Alexa+) --------------------------------------------------
 # Mounted last at "/" so every route above wins; only /mcp falls through to it.
-_mcp = build_mcp(_find_product, _list_products, _get_analysis)
+_mcp = build_mcp(_find_product, _get_analysis, search_products)
 app.mount("/", _mcp.streamable_http_app())
 
 
