@@ -12,9 +12,21 @@ import hmac
 import json
 import os
 
-from analyzer import ReturnKillerAnalyzer, load_sample_products
+from contextlib import asynccontextmanager
+
+from analyzer import ReturnKillerAnalyzer, load_sample_products, fit_check
+from mcp_server import build_mcp
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    # The mounted MCP app's own lifespan does not run, so start its session manager here.
+    async with _mcp.session_manager.run():
+        yield
+
 
 app = FastAPI(
+    lifespan=lifespan,
     title="ReturnKiller API",
     description="AI agent that reduces Amazon returns caused by size & description mismatches",
     version="0.1.0"
@@ -112,6 +124,30 @@ class AnalysisCache:
 analysis_cache = AnalysisCache()
 
 
+def _find_product(asin: str) -> Optional[Dict[str, Any]]:
+    return next((p for p in load_sample_products() if p["asin"] == asin), None)
+
+
+def _list_products() -> List[Dict[str, Any]]:
+    return [
+        {"asin": p["asin"], "title": p["title"], "category": p.get("category"),
+         "review_count": len(p.get("reviews", []))}
+        for p in load_sample_products()
+    ]
+
+
+def _get_analysis(asin: str) -> Optional[Dict[str, Any]]:
+    cached = analysis_cache.get(asin)
+    if cached:
+        return cached
+    product = _find_product(asin)
+    if not product:
+        return None
+    analysis = analyzer.to_dict(analyzer.analyze_product(product))
+    analysis_cache[asin] = analysis
+    return analysis
+
+
 class AnalyzeRequest(BaseModel):
     asin: Optional[str] = None
     product: Optional[Dict[str, Any]] = None
@@ -203,29 +239,22 @@ def analyze_custom(req: AnalyzeRequest):
 def fit_question(req: FitQuestion):
     """Simulate an Alexa 'will it fit?' interaction."""
     
-    # Get or create analysis
-    if req.asin in analysis_cache:
-        analysis = analysis_cache[req.asin]
-    else:
-        products = load_sample_products()
-        product = next((p for p in products if p["asin"] == req.asin), None)
-        if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
-        result = analyzer.analyze_product(product)
-        analysis = analyzer.to_dict(result)
-        analysis_cache[req.asin] = analysis
-    
-    # Build response
+    product = _find_product(req.asin)
+    analysis = _get_analysis(req.asin)
+    if not product or not analysis:
+        raise HTTPException(status_code=404, detail="Product not found")
+
     spoken = analysis["alexa_fit_response"]
-    
-    # If user provided space context, enhance the answer
-    if req.space_description:
-        spoken += f" Based on your description of '{req.space_description}', "
-        spoken += "I recommend measuring the exact opening and comparing it to the dimensions on screen."
-    
+
+    # If the shopper described a space, answer with real arithmetic on the listed height.
+    fit = fit_check(product, req.space_description or req.question)
+    if fit["clearance_cm"] is not None:
+        spoken = fit["spoken"]
+
     return {
         "asin": req.asin,
         "question": req.question,
+        "fit_verdict": fit["verdict"],
         "spoken_response": spoken,
         "size_chart": analysis["size_chart_text"],
         "visual_suggestions": analysis["visual_suggestions"],
@@ -1226,6 +1255,19 @@ def demo_ui():
     """
     return HTMLResponse(content=html)
 
+
+@app.get("/alexa", response_class=HTMLResponse)
+def alexa_simulator():
+    """Simulated Alexa+ experience: a browser MCP client talking to /mcp."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "alexa.html")
+    with open(path, encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+
+# ---- MCP server (Alexa+) --------------------------------------------------
+# Mounted last at "/" so every route above wins; only /mcp falls through to it.
+_mcp = build_mcp(_find_product, _list_products, _get_analysis)
+app.mount("/", _mcp.streamable_http_app())
 
 
 if __name__ == "__main__":
