@@ -435,6 +435,25 @@ def demo_ui():
       padding: 22px;
       margin-bottom: 20px;
     }
+    .alexa-main { padding: 20px; margin-bottom: 20px; text-align: center; }
+    .alexa-frame { width: 100%; height: 700px; border: 0; border-radius: 16px; background: #070a0f; }
+    .alexa-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+    .alexa-actions .btn { text-decoration: none; }
+    .search-results { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 320px; overflow-y: auto; }
+    .result-item {
+      text-align: left; background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); color: var(--text);
+      border-radius: 14px; padding: 12px 16px; font-family: inherit; font-size: 0.95rem; cursor: pointer;
+    }
+    .result-item:hover { border-color: rgba(255,153,0,0.5); }
+    .result-item[aria-selected="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .result-item small { display: block; color: var(--muted); margin-top: 2px; }
+    .search-empty { color: var(--muted); font-size: 0.9rem; padding: 8px 4px; }
+    #productSearch {
+      flex: 1; min-width: 220px; max-width: 420px;
+      background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); color: var(--text);
+      padding: 12px 18px; border-radius: var(--radius-pill); font-size: 0.95rem; font-family: inherit;
+    }
+    #productSearch:focus { outline: none; border-color: rgba(255,153,0,0.5); box-shadow: 0 0 0 4px var(--accent-soft); }
     .picker-label {
       font-size: 0.72rem;
       font-weight: 600;
@@ -450,12 +469,6 @@ def demo_ui():
       flex-wrap: wrap;
       justify-content: center;
     }
-    #productSearch {
-      flex: 1; min-width: 220px; max-width: 420px;
-      background: rgba(0,0,0,0.25); border: 1px solid var(--glass-border); color: var(--text);
-      padding: 12px 18px; border-radius: var(--radius-pill); font-size: 0.95rem; font-family: inherit;
-    }
-    #productSearch:focus { outline: none; border-color: rgba(255,153,0,0.5); box-shadow: 0 0 0 4px var(--accent-soft); }
     select {
       flex: 1;
       min-width: 220px;
@@ -914,40 +927,36 @@ def demo_ui():
     </header>
 
     <section class="hero">
-      <h1>Will it <span>actually fit?</span></h1>
-      <p>Spot size & description return risks — then ask Alexa before you buy.</p>
+      <h1>Ask Alexa before you buy.<br><span>Skip the return.</span></h1>
+      <p>Tell Alexa the product and the space you have. ReturnKiller checks the listing and what buyers said, then answers: will it fit?</p>
+    </section>
+
+    <section class="glass alexa-main" id="alexaMain">
+      <div class="alexa-kicker">Alexa+ · live demo</div>
+      <iframe src="/alexa" title="ReturnKiller on Alexa+" loading="lazy" class="alexa-frame"></iframe>
+      <div class="alexa-actions">
+        <a class="btn btn-soft" href="/alexa" target="_blank" rel="noopener">Open full screen</a>
+        <button class="btn btn-soft" type="button" onclick="openAlexa(true)">Say it to a real Echo</button>
+      </div>
     </section>
 
     <section class="glass picker">
-      <div class="picker-label">Search products <span id="catalogNote" style="opacity:.6"></span></div>
-      <div class="picker-row" style="margin-bottom:8px">
-        <input id="productSearch" type="search" placeholder="e.g. air fryer, cutting board, backpack" autocomplete="off" />
-      </div>
-      <div class="picker-row">
-        <select id="productSelect">
-          <option value="">Loading products…</option>
-        </select>
-        <button class="btn" id="analyzeBtn" onclick="runAnalysis()">Analyze</button>
+      <div class="picker-label">Or look up a product yourself <span id="catalogNote" style="opacity:.6"></span></div>
+      <form class="picker-row" id="searchForm">
+        <input id="productSearch" type="search" placeholder="Search products, e.g. air fryer" autocomplete="off" />
+        <button class="btn" type="submit" id="searchBtn">Search</button>
+      </form>
+      <div id="searchResults" class="search-results" role="listbox" aria-label="Search results"></div>
+      <div class="picker-row" style="margin-top:14px">
+        <button class="btn" id="analyzeBtn" type="button" onclick="runAnalysis()" disabled>Analyze</button>
       </div>
     </section>
 
     <div id="results">
       <!-- Alexa first -->
       <section class="glass alexa-hero">
-        <div class="alexa-kicker">Alexa experience</div>
-        <p id="alexaResponse" class="alexa-spoken">Select a product and analyze to hear how Alexa answers “will it fit?”</p>
-
-        <button class="ask-alexa-btn" id="askAlexaBtn" onclick="openAlexa()">
-          <span class="mic">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
-              <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
-              <line x1="12" y1="19" x2="12" y2="22"/>
-            </svg>
-          </span>
-          Ask Alexa
-        </button>
-        <p class="alexa-hint">Opens a voice-style check · works with your Echo or the Alexa app</p>
+        <div class="alexa-kicker">Check your space</div>
+        <p id="alexaResponse" class="alexa-spoken">Analyze a product to hear how Alexa answers “will it fit?”</p>
 
         <div class="fit-input-wrap">
           <input id="fitQuestion" placeholder="Or type a space… e.g. under a 40cm cabinet" />
@@ -1036,35 +1045,59 @@ def demo_ui():
         {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
     }
 
-    let searchTimer = null;
-    async function loadProducts(q) {
-      const select = document.getElementById('productSelect');
+    async function searchProducts(q) {
+      const box = document.getElementById('searchResults');
+      box.replaceChildren();
       try {
-        const res = await fetch('/products?limit=50&q=' + encodeURIComponent(q || ''));
+        const res = await fetch('/products?limit=8&q=' + encodeURIComponent(q || ''));
         const data = await res.json();
-        select.replaceChildren();
-        if (!data.products.length) {
-          select.append(new Option('No matches', ''));
-        }
-        data.products.forEach(p => select.append(new Option(p.short_title || p.title, p.asin)));
         const c = data.catalog || {};
         document.getElementById('catalogNote').textContent =
           c.products ? '(' + c.products + ' products' + (c.source === 'sample' ? ', demo data' : '') + ')' : '';
+        if (!data.products.length) {
+          const d = document.createElement('div');
+          d.className = 'search-empty';
+          d.textContent = 'No products match "' + q + '". Try a simpler word.';
+          box.append(d);
+          return;
+        }
+        data.products.forEach(p => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'result-item'; b.setAttribute('role', 'option');
+          b.setAttribute('aria-selected', 'false');
+          b.dataset.asin = p.asin; b.dataset.title = p.short_title || p.title;
+          b.textContent = p.short_title || p.title;
+          const sm = document.createElement('small');
+          sm.textContent = [p.category, p.price != null ? '$' + p.price : null].filter(Boolean).join(' · ');
+          b.append(sm);
+          b.addEventListener('click', () => selectProduct(b));
+          box.append(b);
+        });
+        if (data.products.length === 1) selectProduct(box.firstChild);
       } catch (e) {
-        select.replaceChildren(new Option('Could not load products', ''));
+        const d = document.createElement('div');
+        d.className = 'search-empty'; d.textContent = 'Search failed. Is the server running?';
+        box.append(d);
       }
     }
+
+    function selectProduct(btn) {
+      document.querySelectorAll('.result-item').forEach(x => x.setAttribute('aria-selected', String(x === btn)));
+      currentAsin = btn.dataset.asin;
+      document.getElementById('analyzeBtn').disabled = false;
+      document.getElementById('analyzeBtn').textContent = 'Analyze ' + btn.dataset.title.slice(0, 32);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('productSearch').addEventListener('input', (ev) => {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(() => loadProducts(ev.target.value), 250);
+      document.getElementById('searchForm').addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        searchProducts(document.getElementById('productSearch').value.trim());
       });
     });
 
     async function runAnalysis() {
-      const asin = document.getElementById('productSelect').value;
+      const asin = currentAsin;
       if (!asin) return;
-      currentAsin = asin;
 
       const btn = document.getElementById('analyzeBtn');
       btn.classList.add('loading');
@@ -1164,10 +1197,6 @@ def demo_ui():
     }
 
     function openAlexa() {
-      if (!currentAsin) {
-        alert('Analyze a product first.');
-        return;
-      }
       document.getElementById('alexaModal').classList.add('open');
     }
     function closeAlexa() {
@@ -1253,7 +1282,7 @@ def demo_ui():
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      loadProducts();
+      searchProducts('');
       const input = document.getElementById('fitQuestion');
       if (input) {
         input.addEventListener('keydown', (e) => {
