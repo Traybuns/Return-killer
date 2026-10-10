@@ -9,7 +9,9 @@ COPY --from=lwa /lambda-adapter /opt/extensions/lambda-adapter
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ARG BUILD_SHA=unknown
+ENV BUILD_SHA=${BUILD_SHA} \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
     AWS_LWA_PORT=8000 \
@@ -19,7 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY analyzer.py app.py catalog.py mcp_server.py sample_products.json ./
+COPY analyzer.py app.py catalog.py research.py mcp_server.py sample_products.json ./
 COPY static ./static
 COPY data ./data
 

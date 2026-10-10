@@ -77,7 +77,7 @@ def test_mcp_handshake_and_tools(client):
                                       "clientInfo": {"name": "t", "version": "1"}}).json()
     assert init["result"]["serverInfo"]["name"] == "ReturnKiller"
     tools = rpc(client, "tools/list").json()["result"]["tools"]
-    assert {t["name"] for t in tools} == {"list_products", "search_products", "check_fit", "analyze_listing"}
+    assert {t["name"] for t in tools} == {"list_products", "search_products", "research_product", "check_fit", "analyze_listing"}
     assert all(t["annotations"]["readOnlyHint"] for t in tools)
 
 
@@ -103,3 +103,19 @@ def test_existing_routes_still_win_over_the_mount(client):
     assert client.get("/alexa").status_code == 200
     assert client.get("/demo").status_code == 200
     assert client.get("/products").json()["count"] >= 2
+
+
+def test_mcp_research_tool(client, monkeypatch):
+    import json as _json
+    import app as a
+    from tests.test_research import FakeBedrock, RAW  # noqa: F401
+    monkeypatch.setattr(a.analyzer, "use_bedrock", True)
+    monkeypatch.setattr(a.analyzer, "bedrock_client", FakeBedrock(RAW))
+    a.analysis_cache._mem.clear()
+    client.post("/mcp", headers=HEADERS, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
+    r = client.post("/mcp", headers=HEADERS, json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": {"name": "research_product", "arguments": {"query": "standing desk"}}}).json()
+    sc = r["result"]["structuredContent"]
+    sc = sc.get("result", sc)
+    assert sc["product"]["asin"] == "web-standing-desk" and "found" in sc["spoken"].lower()

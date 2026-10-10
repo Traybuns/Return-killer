@@ -22,13 +22,14 @@ def build_mcp(
     get_product: Callable[[str], Optional[Dict[str, Any]]],
     get_analysis: Callable[[str], Dict[str, Any]],
     search: Callable[..., Dict[str, Any]],
+    research: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
 ) -> FastMCP:
     mcp = FastMCP(
         "ReturnKiller",
         instructions=(
             "ReturnKiller tells shoppers whether an Amazon product will actually fit or match "
             "their expectations before they order, so they don't have to return it. Call "
-            "search_products to find a product by name, check_fit when the shopper describes a "
+            "search_products to find a product by name (if it returns nothing, call research_product, which looks it up on the web), check_fit when the shopper describes a "
             "space, and analyze_listing for return risk. Read the 'spoken' field aloud."
         ),
         stateless_http=True,
@@ -59,6 +60,22 @@ def build_mcp(
         """Search the catalog by product name or category, e.g. 'air fryer'.
         Returns at most 5 products with their ASINs."""
         return _find(query, limit)
+
+    @mcp.tool(name="research_product", annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
+    def research_product_tool(query: str) -> Dict[str, Any]:
+        """Look up ANY product on the web when it is not in the catalog. Slower (up to ~20 s).
+        Returns the product with an ASIN-like id usable by check_fit and analyze_listing."""
+        if research is None:
+            return {"product": None, "spoken": "Web research is not available right now."}
+        try:
+            product = research(query)
+        except RuntimeError:
+            return {"product": None, "spoken": "I couldn't reach my web research right now. Please try again."}
+        if not product:
+            return {"product": None, "spoken": f"I couldn't identify a product for {query}."}
+        return {"product": product,
+                "spoken": f"I found {product['short_title']} online. Ask me whether it will fit, or how risky it is."}
 
     @mcp.tool(name="list_products", annotations=READ_ONLY)
     def list_products_tool(limit: int = 5) -> Dict[str, Any]:
@@ -91,8 +108,12 @@ def build_mcp(
         seen = analysis.get("reviews_analyzed") or 0
         proxy = analysis.get("risk_basis") == "review_text_proxy"
         spoken = f"The return risk is {_level(score)}, {score:.0f} out of 100"
-        spoken += ", estimated from what reviewers wrote." if proxy else "."
-        if top:
+        web = analysis.get("risk_basis") == "web_research"
+        spoken += (", estimated from what reviewers wrote." if proxy
+                   else ", from web research rather than store reviews." if web else ".")
+        if top and web:
+            spoken += f" Buyers commonly report {top['theme'].lower()}."
+        elif top:
             if seen:
                 spoken += (f" The biggest issue is {top['theme'].lower()}, mentioned in "
                            f"{top['frequency']} of the {seen} reviews I looked at.")
@@ -105,8 +126,9 @@ def build_mcp(
             "risk_level": _level(score),
             "risk_basis": analysis.get("risk_basis"),
             "reviews_analyzed": seen,
+            "sources": (analysis.get("sources") or [])[:5],
             "top_complaints": [
-                {"theme": c["theme"], "mentions": c["frequency"], "severity": c["severity"],
+                {"theme": c["theme"], "mentions": c["frequency"], "detail": c.get("detail", ""), "severity": c["severity"],
                  "fix": c["suggested_fix"]} for c in complaints[:3]
             ],
             "size_chart": analysis.get("size_chart_text"),
