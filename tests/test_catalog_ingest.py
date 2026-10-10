@@ -87,3 +87,18 @@ def test_short_title_and_search_fallback():
     import catalog
     assert catalog.short_title("Acme Air Fryer - 5 Qt, Black, Digital") == "Acme Air Fryer"
     assert catalog.search_products("air fryer")["total"] >= 1
+
+
+def test_per_query_cap_and_preset(tmp_path, monkeypatch):
+    ing = _load_ingest()
+    meta = [{"parent_asin": f"F{i}", "title": f"Brand{i} Air Fryer", "rating_number": 5000} for i in range(6)]
+    meta += [{"parent_asin": f"T{i}", "title": f"Brand{i} Toaster Oven", "rating_number": 5000} for i in range(6)]
+    revs = [{"parent_asin": p["parent_asin"], "rating": 5, "title": "t", "text": "fine"} for p in meta]
+    mp, rp, out = tmp_path / "m.jsonl.gz", tmp_path / "r.jsonl.gz", tmp_path / "p.json"
+    _write_gz(mp, meta)
+    _write_gz(rp, revs)
+    monkeypatch.setattr(sys, "argv", ["x", "--preset", "household", "--per-query", "2",
+                                      "--meta-file", str(mp), "--reviews-file", str(rp), "--out", str(out)])
+    ing.main()
+    titles = [p["title"] for p in json.loads(out.read_text())["products"]]
+    assert sum("Air Fryer" in t for t in titles) == 2 and sum("Toaster Oven" in t for t in titles) == 2
