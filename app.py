@@ -992,7 +992,7 @@ def demo_ui():
     </section>
 
     <section class="glass picker">
-      <div class="picker-label">Or look up a product yourself <span id="catalogNote" style="opacity:.6"></span></div>
+      <div class="picker-label">Or look up a product yourself</div>
       <form class="picker-row" id="searchForm">
         <input id="productSearch" type="search" placeholder="Search products, e.g. air fryer" autocomplete="off" />
         <button class="btn" type="submit" id="searchBtn">Search</button>
@@ -1103,9 +1103,6 @@ def demo_ui():
       try {
         const res = await fetch('/products?limit=8&q=' + encodeURIComponent(q || ''));
         const data = await res.json();
-        const c = data.catalog || {};
-        document.getElementById('catalogNote').textContent =
-          c.products ? '(' + c.products + ' products' + (c.source === 'sample' ? ', demo data' : '') + ')' : '';
         if (!data.products.length) {
           const d = document.createElement('div');
           d.className = 'search-empty';
