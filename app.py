@@ -1109,9 +1109,14 @@ def demo_ui():
         if (!data.products.length) {
           const d = document.createElement('div');
           d.className = 'search-empty';
-          d.textContent = q ? 'Nothing in the catalog matches "' + q + '".' : 'The catalog is empty.';
+          d.textContent = q ? 'Not in the catalog yet' + (data.research_available ? ', so I am looking it up online.' : '.') : 'The catalog is empty.';
           box.append(d);
-          if (q && data.research_available) box.append(researchButton(q));
+          if (q && data.research_available) {
+            // Nothing local: go straight to live research instead of asking for another click.
+            const rb = researchButton(q);
+            box.append(rb);
+            researchProduct(q, rb);
+          }
           return;
         }
         data.products.forEach(p => {
