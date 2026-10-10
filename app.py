@@ -251,7 +251,19 @@ def analyze_by_asin(asin: str):
     result = analyzer.analyze_product(product)
     result_dict = analyzer.to_dict(result)
     analysis_cache[asin] = result_dict
-    return result_dict
+    return {**result_dict, "reviews": _sample_reviews(product)}
+
+
+def _sample_reviews(product: Dict[str, Any], limit: int = 12) -> list:
+    """Reviews to show beside the analysis: lowest stars first, so the problems lead."""
+    out = []
+    for r in sorted(product.get("reviews") or [], key=lambda x: x.get("rating") or 0)[:limit]:
+        try:
+            rating = max(1, min(5, int(r.get("rating") or 0)))
+        except (TypeError, ValueError):
+            continue
+        out.append({"rating": rating, "title": str(r.get("title") or "")[:120], "text": str(r.get("text") or "")[:500]})
+    return out
 
 
 @app.post("/analyze")
@@ -413,7 +425,7 @@ def demo_ui():
       z-index: 1;
       max-width: 1040px;
       margin: 0 auto;
-      padding: 28px 20px 80px;
+      padding: 14px 20px 80px;
     }
 
     /* Header */
@@ -421,7 +433,7 @@ def demo_ui():
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 36px;
+      margin-bottom: 10px;
     }
     .logo {
       display: flex;
@@ -459,14 +471,14 @@ def demo_ui():
     /* Hero */
     .hero {
       text-align: center;
-      margin-bottom: 32px;
+      margin-bottom: 14px;
     }
     .hero h1 {
-      font-size: clamp(1.9rem, 5vw, 2.6rem);
+      font-size: clamp(1.4rem, 3.6vw, 1.9rem);
       font-weight: 800;
       letter-spacing: -0.035em;
       line-height: 1.15;
-      margin-bottom: 12px;
+      margin-bottom: 4px;
     }
     .hero h1 span {
       background: linear-gradient(135deg, var(--accent), #ffc14d);
@@ -476,8 +488,8 @@ def demo_ui():
     }
     .hero p {
       color: var(--muted);
-      font-size: 1.05rem;
-      max-width: 440px;
+      font-size: 0.95rem;
+      max-width: 520px;
       margin: 0 auto;
     }
 
@@ -486,8 +498,13 @@ def demo_ui():
       padding: 22px;
       margin-bottom: 20px;
     }
-    .alexa-main { padding: 20px; margin-bottom: 20px; text-align: center; }
-    .alexa-frame { width: 100%; height: 700px; border: 0; border-radius: 16px; background: #070a0f; }
+    .review { padding: 12px 0; border-top: 1px solid var(--glass-border); }
+    .review:first-child { border-top: 0; padding-top: 0; }
+    .review-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 4px; font-weight: 600; font-size: 0.92rem; }
+    .stars { color: var(--accent); letter-spacing: 1px; font-size: 0.85rem; }
+    .review p { color: var(--text-secondary); font-size: 0.9rem; line-height: 1.55; }
+    .alexa-main { margin-bottom: 18px; }
+    .alexa-frame { display: block; width: 100%; height: clamp(440px, calc(100vh - 190px), 600px); border: 1px solid var(--glass-border); border-radius: 20px; background: #070a0f; }
     .alexa-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
     .alexa-actions .btn { text-decoration: none; }
     .search-results { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 320px; overflow-y: auto; }
@@ -978,17 +995,12 @@ def demo_ui():
     </header>
 
     <section class="hero">
-      <h1>Ask Alexa before you buy.<br><span>Skip the return.</span></h1>
-      <p>Tell Alexa the product and the space you have. ReturnKiller checks the listing and what buyers said, then answers: will it fit?</p>
+      <h1>Ask Alexa before you buy. <span>Skip the return.</span></h1>
+      <p>Name a product and your space. Alexa checks whether it fits.</p>
     </section>
 
-    <section class="glass alexa-main" id="alexaMain">
-      <div class="alexa-kicker">Alexa+ · live demo</div>
-      <iframe src="/alexa" title="ReturnKiller on Alexa+" loading="lazy" class="alexa-frame"></iframe>
-      <div class="alexa-actions">
-        <a class="btn btn-soft" href="/alexa" target="_blank" rel="noopener">Open full screen</a>
-        <button class="btn btn-soft" type="button" onclick="openAlexa(true)">Say it to a real Echo</button>
-      </div>
+    <section class="alexa-main" id="alexaMain">
+      <iframe src="/alexa" title="Ask Alexa" class="alexa-frame" allow="microphone; camera"></iframe>
     </section>
 
     <section class="glass picker">
@@ -1014,21 +1026,6 @@ def demo_ui():
           <button class="btn btn-soft" onclick="askFit()">Check fit</button>
         </div>
 
-        <div class="scan-row">
-          <label class="scan-btn" for="spacePhoto">
-            📷 Scan my space
-          </label>
-          <input type="file" id="spacePhoto" accept="image/*" capture="environment" style="display:none" onchange="onSpacePhoto(event)" />
-          <button class="scan-btn" type="button" onclick="document.getElementById('spacePhoto').click()">Upload photo</button>
-        </div>
-        <div class="scan-preview" id="scanPreview"><img id="scanPreviewImg" alt="Space preview" /></div>
-        <div class="scan-status" id="scanStatus">Analyzing your space with vision…</div>
-        <div id="scanResultBox">
-          <div class="label">Space scan</div>
-          <div id="scanResultText" class="text"></div>
-          <div class="metrics" id="scanMetrics"></div>
-        </div>
-
         <div id="fitResult">
           <div class="label">Alexa says</div>
           <div id="fitResultText" class="text"></div>
@@ -1036,7 +1033,7 @@ def demo_ui():
       </section>
 
       <div class="grid" style="margin-bottom:14px">
-        <div class="glass card full">
+        <div class="glass card full" id="riskCard">
           <div class="card-title">Return risk</div>
           <div class="risk-row">
             <div id="riskScore" class="risk-number">—</div>
@@ -1047,6 +1044,12 @@ def demo_ui():
             </div>
           </div>
         </div>
+      </div>
+
+      <div class="glass card" id="reviewsCard" style="display:none;margin-bottom:14px">
+        <div class="card-title">What buyers said</div>
+        <div id="reviewsList"></div>
+        <button class="btn btn-soft" id="reviewsMore" type="button" style="display:none;margin-top:10px">Show more reviews</button>
       </div>
 
       <div class="grid">
@@ -1180,6 +1183,28 @@ def demo_ui():
       });
     });
 
+    function renderReviews(reviews) {
+      const card = document.getElementById('reviewsCard');
+      const list = document.getElementById('reviewsList');
+      const more = document.getElementById('reviewsMore');
+      list.replaceChildren();
+      card.style.display = reviews.length ? 'block' : 'none';
+      const draw = (r) => {
+        const d = document.createElement('div'); d.className = 'review';
+        const h = document.createElement('div'); h.className = 'review-head';
+        const st = document.createElement('span'); st.className = 'stars';
+        st.textContent = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+        st.setAttribute('aria-label', r.rating + ' out of 5 stars');
+        const t = document.createElement('span'); t.textContent = r.title || '';
+        h.append(st, t);
+        const p = document.createElement('p'); p.textContent = r.text || '';
+        d.append(h, p); list.append(d);
+      };
+      reviews.slice(0, 4).forEach(draw);
+      more.style.display = reviews.length > 4 ? 'inline-flex' : 'none';
+      more.onclick = () => { reviews.slice(4).forEach(draw); more.style.display = 'none'; };
+    }
+
     async function runAnalysis() {
       const asin = currentAsin;
       if (!asin) return;
@@ -1248,6 +1273,12 @@ def demo_ui():
           (data.improved_bullets || []).map(b => `<li>${esc(b)}</li>`).join('') ||
           '<li class="empty-state">No suggestions</li>';
 
+        renderReviews(data.reviews || []);
+        const frame = document.querySelector('.alexa-frame');
+        if (frame && frame.contentWindow) {
+          frame.contentWindow.postMessage({ type: 'rk-product', asin: asin, title: data.title || '',
+            short_title: (data.title || '').split(' - ')[0].slice(0, 60) }, location.origin);
+        }
         document.getElementById('sizeChart').textContent = data.size_chart_text || '—';
         document.getElementById('alexaResponse').textContent = data.alexa_fit_response || '—';
         document.getElementById('fitResult').style.display = 'none';

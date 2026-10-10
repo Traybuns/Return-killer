@@ -41,17 +41,45 @@ MISMATCH = re.compile(
 )
 
 
-# ~60 household and appliance terms. With --per-query 4 this yields up to ~240 varied products.
+# ~200 household and appliance terms. With --per-query 1 this yields up to ~200 varied products.
 HOUSEHOLD = [
-    "air fryer", "toaster oven", "microwave", "blender", "coffee maker", "espresso machine", "electric kettle",
-    "rice cooker", "slow cooker", "pressure cooker", "stand mixer", "food processor", "toaster", "waffle maker",
-    "dish rack", "cutting board", "knife block", "cookware set", "baking sheet", "food storage container",
-    "trash can", "robot vacuum", "vacuum cleaner", "air purifier", "humidifier", "dehumidifier", "space heater",
-    "tower fan", "floor lamp", "desk lamp", "bookshelf", "shoe rack", "storage bin", "drawer organizer",
-    "closet organizer", "laundry hamper", "ironing board", "shower curtain", "bath mat", "mattress topper",
-    "curtain rod", "wall shelf", "step stool", "spice rack", "paper towel holder", "water filter pitcher",
-    "ice maker", "mini fridge", "wine cooler", "juicer", "sandwich maker", "popcorn maker", "bread machine",
-    "electric grill", "hand mixer", "immersion blender", "can opener", "salad spinner", "nightstand", "coat rack",
+    "air fryer", "toaster oven", "microwave", "blender", "coffee maker", "espresso machine",
+    "electric kettle", "rice cooker", "slow cooker", "pressure cooker", "stand mixer", "food processor",
+    "toaster", "waffle maker", "dish rack", "cutting board", "knife block", "cookware set", "baking sheet",
+    "food storage container", "trash can", "robot vacuum", "vacuum cleaner", "air purifier", "humidifier",
+    "dehumidifier", "space heater", "tower fan", "floor lamp", "desk lamp", "bookshelf", "shoe rack",
+    "storage bin", "drawer organizer", "closet organizer", "laundry hamper", "ironing board",
+    "shower curtain", "bath mat", "mattress topper", "curtain rod", "wall shelf", "step stool", "spice rack",
+    "paper towel holder", "water filter pitcher", "ice maker", "mini fridge", "wine cooler", "juicer",
+    "sandwich maker", "popcorn maker", "bread machine", "electric grill", "hand mixer", "immersion blender",
+    "can opener", "salad spinner", "nightstand", "coat rack", "ottoman", "bar stool", "tv stand",
+    "coffee table", "side table", "console table", "bedside lamp", "table lamp", "pendant light",
+    "wall clock", "alarm clock", "picture frame", "mirror", "throw pillow", "throw blanket", "comforter",
+    "duvet cover", "bed sheets", "pillow", "weighted blanket", "memory foam pillow", "bath towel",
+    "hand towel", "shower head", "toilet brush", "soap dispenser", "toothbrush holder", "bathroom scale",
+    "towel rack", "laundry basket", "clothes drying rack", "garment rack", "hangers", "steam iron",
+    "garment steamer", "fabric shaver", "lint remover", "mop", "broom", "dustpan", "spray bottle", "bucket",
+    "sponge", "scrub brush", "squeegee", "window cleaner", "steam mop", "carpet cleaner", "handheld vacuum",
+    "cordless vacuum", "stick vacuum", "paper shredder", "desk organizer", "filing cabinet", "bookends",
+    "magazine rack", "umbrella stand", "doormat", "key holder", "wall hooks", "over the door hook",
+    "under bed storage", "vacuum storage bag", "garment bag", "shoe organizer", "jewelry organizer",
+    "cosmetic organizer", "lazy susan", "turntable organizer", "fridge organizer", "pantry organizer",
+    "bread box", "fruit bowl", "cake stand", "serving tray", "serving bowl", "salad bowl", "mixing bowls",
+    "measuring cups", "measuring spoons", "kitchen scale", "kitchen timer", "meat thermometer", "oven mitts",
+    "apron", "dish towels", "dish soap dispenser", "sink caddy", "dish drying mat", "colander", "strainer",
+    "grater", "peeler", "kitchen shears", "knife sharpener", "chef knife", "paring knife", "bread knife",
+    "steak knives", "cast iron skillet", "nonstick pan", "frying pan", "saucepan", "stockpot", "dutch oven",
+    "roasting pan", "casserole dish", "muffin pan", "cake pan", "pie dish", "cookie sheet", "cooling rack",
+    "rolling pin", "pizza stone", "pizza cutter", "tea kettle", "teapot", "french press", "pour over coffee",
+    "coffee grinder", "milk frother", "travel mug", "water bottle", "thermos", "lunch box", "bento box",
+    "ice cube tray", "popsicle mold", "wine glasses", "coffee mugs", "drinking glasses", "plate set",
+    "dinnerware set", "flatware set", "chopsticks", "utensil holder", "candle", "diffuser", "night light",
+    "extension cord", "power strip", "surge protector", "smoke detector", "fire extinguisher", "flashlight",
+    "tool box", "screwdriver set", "step ladder", "stud finder", "tape measure", "doorstop", "door lock",
+    "window blinds", "blackout curtains", "area rug", "runner rug", "floor mat", "ceiling fan",
+    "portable fan", "heating pad", "electric blanket", "sewing machine", "sewing kit", "clothes steamer",
+    "laundry detergent dispenser", "trash bags", "compost bin", "recycling bin", "pet bowl", "cat litter box",
+    "dog bed",
 ]
 
 
@@ -181,7 +209,7 @@ def main():
     ap.add_argument("--meta-file", help="local or URL path to meta jsonl(.gz); default: dataset URL")
     ap.add_argument("--reviews-file", help="local or URL path to reviews jsonl(.gz); default: dataset URL")
     ap.add_argument("--query", action="append", default=[], help="keep products whose title contains this (repeatable)")
-    ap.add_argument("--preset", choices=["household"], help="household: ~60 kitchen/home appliance and storage terms")
+    ap.add_argument("--preset", choices=["household"], help="household: ~200 kitchen, bath, bedroom, cleaning and storage items")
     ap.add_argument("--per-query", type=int, default=0, help="keep at most N products per --query term (variety)")
     ap.add_argument("--min-ratings", type=int, default=None, help="skip products with fewer ratings overall")
     ap.add_argument("--max-products", type=int, default=None)
@@ -196,8 +224,9 @@ def main():
     queries = [q.lower() for q in a.query]
     if a.preset == "household":
         queries = list(dict.fromkeys(queries + HOUSEHOLD))
-        a.per_query = a.per_query or 4
+        a.per_query = a.per_query or 1
         a.max_products = a.max_products or 250
+        a.max_meta_lines = a.max_meta_lines or 2_000_000  # rare terms never fill; bound the scan
         # Review lines are sampled, so only well-reviewed products collect enough for a score.
         a.min_ratings = a.min_ratings if a.min_ratings is not None else 1000
     a.max_products = a.max_products or 150
