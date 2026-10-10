@@ -13,7 +13,9 @@ REPO_URL="$(terraform output -raw ecr_repository_url)"
 REGISTRY="${REPO_URL%%/*}"
 
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-docker buildx build --platform linux/arm64 --provenance=false -t "${REPO_URL}:${TAG}" --push ..
+SHA="$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unknown)"
+test -f ../data/products.json || echo "WARNING: data/products.json missing; the app will ship with the 2 demo products only." >&2
+docker buildx build --platform linux/arm64 --provenance=false --build-arg "BUILD_SHA=${SHA}" -t "${REPO_URL}:${TAG}" --push ..
 
 terraform apply -input=false -auto-approve -var "image_tag=${TAG}"
 
@@ -21,7 +23,9 @@ terraform apply -input=false -auto-approve -var "image_tag=${TAG}"
 aws lambda update-function-code --region "$REGION" \
   --function-name "$(terraform output -raw lambda_function_name)" \
   --image-uri "${REPO_URL}:${TAG}" >/dev/null
+aws lambda wait function-updated --region "$REGION" --function-name "$(terraform output -raw lambda_function_name)"
 
 echo
 echo "App:    $(terraform output -raw app_url)/demo"
+echo "Build:  ${SHA}  (should match the \"build\" field at $(terraform output -raw app_url)/)"
 echo "Health: $(terraform output -raw app_url)/health?deep=true"

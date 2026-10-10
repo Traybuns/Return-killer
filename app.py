@@ -160,6 +160,7 @@ def root():
     return {
         "name": "ReturnKiller",
         "version": "0.2.0",
+        "build": os.environ.get("BUILD_SHA", "unknown"),
         "status": "running",
         "bedrock_vision": _use_bedrock,
         "catalog": catalog_info(),
@@ -1294,7 +1295,7 @@ def demo_ui():
 </body>
 </html>
     """
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/alexa", response_class=HTMLResponse)

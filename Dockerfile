@@ -9,7 +9,9 @@ COPY --from=lwa /lambda-adapter /opt/extensions/lambda-adapter
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ARG BUILD_SHA=unknown
+ENV BUILD_SHA=${BUILD_SHA} \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
     AWS_LWA_PORT=8000 \
