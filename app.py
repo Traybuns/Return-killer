@@ -15,7 +15,8 @@ import os
 from contextlib import asynccontextmanager
 
 from analyzer import ReturnKillerAnalyzer, fit_check
-from catalog import get_product, search_products, catalog_info
+from catalog import get_product, search_products, catalog_info, short_title as catalog_short_title
+import research as web_research
 from mcp_server import build_mcp
 
 
@@ -125,8 +126,30 @@ class AnalysisCache:
 analysis_cache = AnalysisCache()
 
 
+def _research(query: str) -> Optional[Dict[str, Any]]:
+    """Web-research a product that is not in the catalog; cached so repeat asks are instant."""
+    query = web_research.clean_query(query)
+    if len(query) < 2:
+        return None
+    pid = web_research.research_id(query)
+    cached = analysis_cache.get(f"product:{pid}")
+    if cached:
+        return cached
+    product = web_research.research_product(analyzer, query)
+    if product:
+        analysis_cache[f"product:{product['asin']}"] = product
+    return product
+
+
 def _find_product(asin: str) -> Optional[Dict[str, Any]]:
-    return get_product(asin)
+    found = get_product(asin)
+    if found or not web_research.is_research_id(asin):
+        return found
+    try:
+        return _research(web_research.query_from_id(asin))
+    except RuntimeError as e:
+        print(f"⚠ research for {asin} failed: {e}")
+        return None
 
 
 def _get_analysis(asin: str) -> Optional[Dict[str, Any]]:
@@ -188,7 +211,34 @@ def health(deep: bool = False):
 def list_products(q: str = "", limit: int = 50, offset: int = 0):
     """Search the catalog (token match on title/category) or list the most popular products."""
     result = search_products(q, limit=limit, offset=offset)
-    return {"count": result["total"], "products": result["products"], "catalog": catalog_info()}
+    return {
+        "count": result["total"], "products": result["products"], "catalog": catalog_info(),
+        "research_available": bool(_use_bedrock and analyzer.bedrock_client),
+    }
+
+
+def _research_summary(p: Dict[str, Any]) -> Dict[str, Any]:
+    dims = p.get("dimensions") or {}
+    return {
+        "asin": p["asin"], "title": p["title"], "short_title": catalog_short_title(p["title"]),
+        "category": p.get("category"), "price": p.get("price"), "review_count": 0,
+        "has_height": dims.get("height_cm") is not None, "source": "web",
+        "sources": (p.get("web_research") or {}).get("sources", []),
+    }
+
+
+@app.get("/research")
+def research_endpoint(q: str):
+    """Look up any product on the web (Nova web grounding). Slower and costlier than /products."""
+    if not (_use_bedrock and analyzer.bedrock_client):
+        raise HTTPException(status_code=503, detail="Web research is not enabled on this server")
+    try:
+        product = _research(q)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    if not product:
+        raise HTTPException(status_code=404, detail="I could not identify a product from that search")
+    return {"product": _research_summary(product)}
 
 
 @app.get("/analyze/{asin}")
@@ -993,6 +1043,7 @@ def demo_ui():
             <div>
               <div id="riskLevel" class="risk-level">—</div>
               <div id="summary" class="risk-summary"></div>
+              <div id="sources" class="risk-summary" style="margin-top:8px"></div>
             </div>
           </div>
         </div>
@@ -1058,8 +1109,9 @@ def demo_ui():
         if (!data.products.length) {
           const d = document.createElement('div');
           d.className = 'search-empty';
-          d.textContent = 'No products match "' + q + '". Try a simpler word.';
+          d.textContent = q ? 'Nothing in the catalog matches "' + q + '".' : 'The catalog is empty.';
           box.append(d);
+          if (q && data.research_available) box.append(researchButton(q));
           return;
         }
         data.products.forEach(p => {
@@ -1074,11 +1126,46 @@ def demo_ui():
           b.addEventListener('click', () => selectProduct(b));
           box.append(b);
         });
-        if (data.products.length === 1) selectProduct(box.firstChild);
+        if (q && data.research_available) box.append(researchButton(q));
+        else if (data.products.length === 1) selectProduct(box.firstChild);
       } catch (e) {
         const d = document.createElement('div');
         d.className = 'search-empty'; d.textContent = 'Search failed. Is the server running?';
         box.append(d);
+      }
+    }
+
+    function researchButton(q) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'result-item research-item';
+      b.textContent = 'Not listed? Research "' + q + '" on the web';
+      const sm = document.createElement('small');
+      sm.textContent = 'Live lookup with cited sources. Takes 10-20 seconds.';
+      b.append(sm);
+      b.addEventListener('click', () => researchProduct(q, b));
+      return b;
+    }
+
+    async function researchProduct(q, btn) {
+      btn.disabled = true; btn.firstChild.textContent = 'Researching "' + q + '" on the web...';
+      try {
+        const res = await fetch('/research?q=' + encodeURIComponent(q));
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Research failed');
+        const p = data.product;
+        const item = document.createElement('button');
+        item.type = 'button'; item.className = 'result-item'; item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', 'false');
+        item.dataset.asin = p.asin; item.dataset.title = p.short_title || p.title;
+        item.textContent = p.short_title || p.title;
+        const sm = document.createElement('small');
+        sm.textContent = 'Found on the web' + (p.category ? ' · ' + p.category : '');
+        item.append(sm);
+        item.addEventListener('click', () => selectProduct(item));
+        btn.replaceWith(item);
+        selectProduct(item);
+      } catch (e) {
+        btn.disabled = false; btn.firstChild.textContent = e.message + ' Click to retry.';
       }
     }
 
@@ -1130,6 +1217,17 @@ def demo_ui():
           (data.risk_basis === 'review_text_proxy'
             ? ' (Estimated from ' + (data.reviews_analyzed || 0) + ' review texts; Amazon does not publish return reasons.)'
             : '');
+        const srcEl = document.getElementById('sources');
+        srcEl.replaceChildren();
+        (data.sources || []).forEach(u => {
+          if (!/^https?:\\/\\//.test(u)) return;
+          const a = document.createElement('a');
+          a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          try { a.textContent = new URL(u).hostname.replace(/^www\\./, ''); } catch (e) { a.textContent = u; }
+          a.style.marginRight = '12px';
+          srcEl.append(a);
+        });
+        if (srcEl.children.length) srcEl.prepend(document.createTextNode('Sources: '));
 
         const complaintsEl = document.getElementById('complaints');
         if (!data.top_complaints || data.top_complaints.length === 0) {
@@ -1140,8 +1238,9 @@ def demo_ui():
               <div class="complaint-top">
                 <span class="complaint-theme">${esc(c.theme)}</span>
                 <span class="tag ${esc(c.severity)}">${esc(c.severity)}</span>
-                <span class="tag neutral">${c.frequency} mention${c.frequency !== 1 ? 's' : ''}</span>
+                <span class="tag neutral">${c.frequency ? c.frequency + ' mention' + (c.frequency !== 1 ? 's' : '') : 'reported online'}</span>
               </div>
+              ${c.detail ? `<p class="complaint-fix">${esc(c.detail)}</p>` : ''}
               <p class="complaint-fix">${esc(c.suggested_fix)}</p>
               ${c.example_quotes && c.example_quotes[0] ? `<p class="complaint-quote">“${esc(c.example_quotes[0])}”</p>` : ''}
             </div>
@@ -1308,7 +1407,12 @@ def alexa_simulator():
 
 # ---- MCP server (Alexa+) --------------------------------------------------
 # Mounted last at "/" so every route above wins; only /mcp falls through to it.
-_mcp = build_mcp(_find_product, _get_analysis, search_products)
+def _research_summary_for(query: str) -> Optional[Dict[str, Any]]:
+    product = _research(query)
+    return _research_summary(product) if product else None
+
+
+_mcp = build_mcp(_find_product, _get_analysis, search_products, _research_summary_for)
 app.mount("/", _mcp.streamable_http_app())
 
 

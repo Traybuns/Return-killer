@@ -119,7 +119,10 @@ def search_products(query: str = "", limit: int = 10, offset: int = 0) -> Dict[s
         scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
         # Require every query token when any product matches all of them; otherwise best partial.
         best = scored[0][0] if scored else 0
-        ranked = [p for hits, _, p in scored if hits == best]
+        # A partial match must still cover most of the query: "standing desk" should not
+        # return a "desk organizer", it should return nothing so the caller can research it.
+        needed = -(-len(q) * 3 // 5)  # ceil(0.6 * tokens)
+        ranked = [p for hits, _, p in scored if hits == best] if best >= needed else []
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     return {

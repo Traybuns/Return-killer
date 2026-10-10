@@ -216,13 +216,20 @@
 
   const FILLER = /\b(will|would|does|do|can|could|the|a|an|my|me|it|is|are|fit|fits|under|over|in|on|cabinet|clearance|space|shelf|tall|height|how|risky|risk|return|returned|safe|worth|buying|buy|review|reviews|complain|problem|check|find|search|for|about|tell|whether|should|i|of|to|inches|inch|cm|centimeter|centimeters|feet|\d+(\.\d+)?)\b/g;
   async function lookup(u) {
-    // Not in the loaded shortlist: ask the server's catalog search.
+    // Not in the loaded shortlist: ask the server's catalog search, then fall back to web research.
     const q = u.replace(FILLER, ' ').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (!q) return null;
     const r = await callTool('search_products', { query: q, limit: 3 });
-    const top = (r.products || [])[0];
-    if (top && !products.some(p => p.asin === top.asin)) products.push(top);
-    return top || null;
+    let top = (r.products || [])[0];
+    if (!top) {
+      say("That's not in my catalog, so I'm looking it up online. This can take a few seconds.");
+      const w = await callTool('research_product', { query: q });
+      if (!w.product) { say(w.spoken); return null; }
+      top = w.product;
+      say(w.spoken);
+    }
+    if (!products.some(p => p.asin === top.asin)) products.push(top);
+    return top;
   }
 
   async function handle(utterance) {

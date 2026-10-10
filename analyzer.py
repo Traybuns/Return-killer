@@ -7,7 +7,7 @@ size/description mismatches and generate listing improvements.
 import json
 import os
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 
 
@@ -18,6 +18,7 @@ class ComplaintInsight:
     severity: str  # high, medium, low
     example_quotes: List[str]
     suggested_fix: str
+    detail: str = ""  # web research: what buyers report (not a verbatim review quote)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class AnalysisResult:
     # built from how many low-star reviews cite a size/fit/description mismatch.
     risk_basis: str = "return_reasons"
     reviews_analyzed: int = 0
+    sources: List[str] = field(default_factory=list)  # web research citations
 
 
 class ReturnKillerAnalyzer:
@@ -114,6 +116,8 @@ class ReturnKillerAnalyzer:
         Uses Nova 2 Lite when Bedrock is enabled. If the call or validation fails, falls
         back to the offline keyword engine and says so in `engine` / `fallback_reason`.
         """
+        if product.get("source") == "web":
+            return self.analyze_web_product(product)
         if self.use_bedrock and self.bedrock_client:
             try:
                 return self._analyze_bedrock(product)
@@ -939,6 +943,47 @@ Rules:
             reviews_analyzed=min(len(product.get("reviews") or []), 40),  # the prompt reads the first 40
         )
 
+    def analyze_web_product(self, product: Dict[str, Any]) -> AnalysisResult:
+        """Analysis for a product found by live web research (no review data, so no quotes)."""
+        wr = product.get("web_research") or {}
+        title = product.get("title", "")
+        dims = product.get("dimensions") or {}
+        complaints = [
+            ComplaintInsight(theme=c["theme"], frequency=0, severity=c["severity"], example_quotes=[],
+                             suggested_fix=c["fix"], detail=c["detail"])
+            for c in wr.get("complaints", [])
+        ]
+        issues: List[SizeIssue] = []
+        if not all(k in dims for k in ("length_cm", "width_cm", "height_cm")):
+            issues.append(SizeIssue(
+                issue_type="dimension_unclear",
+                description="Web sources did not give full dimensions; measure before you order.",
+                severity="high",
+                recommendation="Check the seller's size chart and compare with your space.",
+            ))
+        weight = {"high": 15, "medium": 8, "low": 3}
+        risk = min(20.0 + sum(weight[c.severity] for c in complaints) + (5 if issues else 0), 80.0)
+        bullets = []
+        if all(k in dims for k in ("length_cm", "width_cm", "height_cm")):
+            l, w, h = dims["length_cm"], dims["width_cm"], dims["height_cm"]
+            bullets.append(f'Dimensions found online: {l} x {w} x {h} cm ({l/2.54:.1f}" x {w/2.54:.1f}" x {h/2.54:.1f}")')
+        bullets += wr.get("tips", [])
+        summary = (
+            f"Estimated from web research, not verified against store reviews. "
+            f"{len(complaints)} common fit or description issue(s) reported online."
+        )
+        return AnalysisResult(
+            asin=product["asin"], title=title, return_risk_score=risk,
+            top_complaints=complaints, size_issues=issues, improved_bullets=bullets[:5],
+            improved_title_suggestion=self._improve_title(title, issues, dims),
+            size_chart_text=self._generate_size_chart(dims, product.get("category") or ""),
+            alexa_fit_response=self._generate_alexa_fit_response(product, dims, issues),
+            visual_suggestions=self._generate_visual_suggestions(issues, dims),
+            summary=summary, analyzed_at=datetime.now(timezone.utc).isoformat(),
+            engine="bedrock+web", model_id=None, risk_basis="web_research", reviews_analyzed=0,
+            sources=list(wr.get("sources", [])),
+        )
+
     def to_dict(self, result: AnalysisResult) -> Dict:
         """Convert AnalysisResult to JSON-serializable dict."""
         return {
@@ -947,6 +992,7 @@ Rules:
             "fallback_reason": result.fallback_reason,
             "risk_basis": result.risk_basis,
             "reviews_analyzed": result.reviews_analyzed,
+            "sources": result.sources,
             "asin": result.asin,
             "title": result.title,
             "return_risk_score": result.return_risk_score,
