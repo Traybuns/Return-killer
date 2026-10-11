@@ -89,3 +89,28 @@ def test_catalog_partial_match_requires_most_tokens():
     import catalog
     assert catalog.search_products("cutting board")["total"] >= 1
     assert catalog.search_products("standing desk cutting")["total"] == 0
+
+
+def test_seed_script_writes_resumable_catalog(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("seed", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "seed_with_web_research.py"))
+    seed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seed)
+    from analyzer import ReturnKillerAnalyzer
+    an = ReturnKillerAnalyzer(use_bedrock=False)
+    an.use_bedrock, an.bedrock_client = True, FakeBedrock(RAW)
+    out = tmp_path / "p.json"
+    seed.main(["--out", str(out), "--limit", "3", "--workers", "1"], analyzer=an)
+    data = json.loads(out.read_text())
+    assert len(data["products"]) == 3 and all(p["asin"].startswith("web-") for p in data["products"])
+    calls = len(an.bedrock_client.calls)
+    seed.main(["--out", str(out), "--limit", "3", "--workers", "1"], analyzer=an)  # resume: nothing new
+    assert len(an.bedrock_client.calls) == calls
+    import catalog
+    os.environ["RETURNKILLER_CATALOG"] = str(out)
+    catalog.reload_catalog()
+    try:
+        assert catalog.search_products("flexispot standing desk")["total"] >= 1
+    finally:
+        del os.environ["RETURNKILLER_CATALOG"]
+        catalog.reload_catalog()
