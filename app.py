@@ -211,6 +211,7 @@ def health(deep: bool = False):
     result: Dict[str, Any] = {"status": "ok", "bedrock_enabled": _use_bedrock}
     if deep:
         result.update(analyzer.health_check())
+        result.update(web_research.check_grounding(analyzer))
     return result
 
 
@@ -1107,7 +1108,9 @@ def demo_ui():
         {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
     }
 
+    let searchSeq = 0;
     async function searchProducts(q) {
+      const seq = ++searchSeq;
       const box = document.getElementById('searchResults');
       box.replaceChildren();
       if (!q) return;
@@ -1116,6 +1119,7 @@ def demo_ui():
         const res = await fetch('/products?limit=5&q=' + encodeURIComponent(q));
         data = await res.json();
       } catch (e) { /* fall through to research */ }
+      if (seq !== searchSeq) return;  // a newer search superseded this one
       data.products.forEach(p => {
         const b = document.createElement('button');
         b.type = 'button'; b.className = 'result-item'; b.setAttribute('role', 'option');

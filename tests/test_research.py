@@ -114,3 +114,19 @@ def test_seed_script_writes_resumable_catalog(tmp_path):
     finally:
         del os.environ["RETURNKILLER_CATALOG"]
         catalog.reload_catalog()
+
+
+def test_errors_are_not_masked_and_bare_model_not_tried(client):
+    c, fake = client
+    import app
+
+    def boom(**kw):
+        fake.calls.append(kw)
+        raise RuntimeError("AccessDenied: bedrock:InvokeTool")
+
+    fake.converse = boom
+    r = c.get("/research", params={"q": "standing desk"})
+    assert r.status_code == 502 and "InvokeTool" in r.json()["detail"]
+    assert all(call["modelId"].startswith("us.") for call in fake.calls)
+    h = c.get("/health", params={"deep": "true"}).json()
+    assert h["web_grounding"] == "error" and "InvokeTool" in h["grounding_error"]

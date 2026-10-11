@@ -140,8 +140,8 @@ def research_product(analyzer, query: str) -> Optional[Dict[str, Any]]:
         return None
     if not (analyzer.use_bedrock and analyzer.bedrock_client):
         raise RuntimeError("web research needs Bedrock (RETURNKILLER_USE_BEDROCK=1)")
-    last_err: Optional[Exception] = None
-    for model_id in analyzer._model_ids():
+    errors: List[str] = []
+    for model_id in grounding_model_ids(analyzer):
         try:
             resp = analyzer.bedrock_client.converse(
                 modelId=model_id,
@@ -150,18 +150,42 @@ def research_product(analyzer, query: str) -> Optional[Dict[str, Any]]:
                 toolConfig={"tools": [{"systemTool": {"name": "nova_grounding"}}]},
                 inferenceConfig={"maxTokens": 1200, "temperature": 0.1},
             )
-        except Exception as e:  # try the next model id
-            last_err = e
+        except Exception as e:  # keep every error: the last one is rarely the useful one
+            errors.append(f"{model_id}: {e}")
             continue
         content = resp["output"]["message"]["content"]
         text = "".join(b.get("text", "") for b in content)
         try:
             raw = analyzer._extract_json_object(text)
         except ValueError as e:
-            last_err = e
+            errors.append(f"{model_id}: {e}")
             continue
         return validate(raw, query, _urls_from(content), research_id(query))
-    raise RuntimeError(f"web research failed: {str(last_err)[:200]}")
+    raise RuntimeError("web research failed: " + " | ".join(errors)[:600])
+
+
+def grounding_model_ids(analyzer) -> List[str]:
+    """Web grounding only exists on the US cross-region profile, so never try the bare model id."""
+    ids = [m for m in analyzer._model_ids() if m.startswith("us.")]
+    return ids or analyzer._model_ids()[:1]
+
+
+def check_grounding(analyzer) -> Dict[str, Any]:
+    """Tiny real grounded call, for /health?deep=true: shows the exact AWS error if it fails."""
+    if not (analyzer.use_bedrock and analyzer.bedrock_client):
+        return {"web_grounding": "disabled"}
+    for model_id in grounding_model_ids(analyzer):
+        try:
+            analyzer.bedrock_client.converse(
+                modelId=model_id,
+                messages=[{"role": "user", "content": [{"text": "In one short sentence, what is an air fryer?"}]}],
+                toolConfig={"tools": [{"systemTool": {"name": "nova_grounding"}}]},
+                inferenceConfig={"maxTokens": 60, "temperature": 0},
+            )
+            return {"web_grounding": "ok", "grounding_model": model_id}
+        except Exception as e:
+            err = f"{model_id}: {e}"
+    return {"web_grounding": "error", "grounding_error": err[:500]}
 
 
 def stable_key(query: str) -> str:
