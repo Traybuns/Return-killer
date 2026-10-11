@@ -69,9 +69,12 @@ class ReturnKillerAnalyzer:
         if use_bedrock:
             try:
                 import boto3
+                from botocore.config import Config
                 self.bedrock_client = boto3.client(
                     "bedrock-runtime",
-                    region_name=region
+                    region_name=region,
+                    config=Config(retries={"max_attempts": 2, "mode": "standard"},
+                                  connect_timeout=5, read_timeout=26),
                 )
                 print("✓ Bedrock client initialized")
             except Exception as e:
@@ -97,7 +100,7 @@ class ReturnKillerAnalyzer:
         """Make a tiny real Bedrock call so a missing permission shows up immediately."""
         if not self.use_bedrock or not self.bedrock_client:
             return {"bedrock": "disabled", "ok": True}
-        last_err = None
+        errors = []
         for model_id in self._model_ids():
             try:
                 self.bedrock_client.converse(
@@ -107,8 +110,8 @@ class ReturnKillerAnalyzer:
                 )
                 return {"bedrock": "ok", "model_id": model_id, "region": self.region, "ok": True}
             except Exception as e:
-                last_err = e
-        return {"bedrock": "error", "error": str(last_err)[:300], "region": self.region, "ok": False}
+                errors.append(f"{model_id}: {e}")
+        return {"bedrock": "error", "error": " | ".join(errors)[:500], "region": self.region, "ok": False}
 
     def analyze_product(self, product: Dict[str, Any]) -> AnalysisResult:
         """Main entry point - analyze a product and return insights.

@@ -130,6 +130,18 @@ def validate(raw: Dict[str, Any], query: str, sources: List[str], asin: str) -> 
     }
 
 
+class ResearchThrottled(RuntimeError):
+    """The AWS account hit its Bedrock token or request quota; retrying now will not help."""
+
+
+def is_throttle(message: str) -> bool:
+    m = message.lower()
+    return "throttling" in m or "too many tokens" in m or "too many requests" in m
+
+
+THROTTLE_MESSAGE = "Live search has used up its AI quota for now. Try again later."
+
+
 def research_product(analyzer, query: str) -> Optional[Dict[str, Any]]:
     """Return a product dict built from web research, or None if no real product was identified.
 
@@ -152,6 +164,8 @@ def research_product(analyzer, query: str) -> Optional[Dict[str, Any]]:
             )
         except Exception as e:  # keep every error: the last one is rarely the useful one
             errors.append(f"{model_id}: {e}")
+            if is_throttle(str(e)):
+                break  # same quota for every attempt; do not burn the 30 s request on more retries
             continue
         content = resp["output"]["message"]["content"]
         text = "".join(b.get("text", "") for b in content)
@@ -161,6 +175,8 @@ def research_product(analyzer, query: str) -> Optional[Dict[str, Any]]:
             errors.append(f"{model_id}: {e}")
             continue
         return validate(raw, query, _urls_from(content), research_id(query))
+    if errors and all(is_throttle(e) for e in errors):
+        raise ResearchThrottled(THROTTLE_MESSAGE)
     raise RuntimeError("web research failed: " + " | ".join(errors)[:600])
 
 

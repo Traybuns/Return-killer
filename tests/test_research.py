@@ -130,3 +130,16 @@ def test_errors_are_not_masked_and_bare_model_not_tried(client):
     assert all(call["modelId"].startswith("us.") for call in fake.calls)
     h = c.get("/health", params={"deep": "true"}).json()
     assert h["web_grounding"] == "error" and "InvokeTool" in h["grounding_error"]
+
+
+def test_throttling_is_reported_as_quota_not_failure(client):
+    c, fake = client
+
+    def throttled(**kw):
+        fake.calls.append(kw)
+        raise RuntimeError("ThrottlingException: Too many tokens per day, please wait before trying again.")
+
+    fake.converse = throttled
+    r = c.get("/research", params={"q": "standing desk"})
+    assert r.status_code == 429 and "quota" in r.json()["detail"].lower()
+    assert len(fake.calls) == 1  # stops after the first throttled attempt

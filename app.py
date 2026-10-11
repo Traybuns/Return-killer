@@ -242,6 +242,8 @@ def research_endpoint(q: str):
         raise HTTPException(status_code=503, detail="Web research is not enabled on this server")
     try:
         product = _research(q)
+    except web_research.ResearchThrottled as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     if not product:

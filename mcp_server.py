@@ -70,7 +70,9 @@ def build_mcp(
             return {"product": None, "spoken": "Web research is not available right now."}
         try:
             product = research(query)
-        except RuntimeError:
+        except RuntimeError as e:
+            if "quota" in str(e).lower():
+                return {"product": None, "spoken": str(e)}
             return {"product": None, "spoken": "I couldn't reach my web research right now. Please try again."}
         if not product:
             return {"product": None, "spoken": f"I couldn't identify a product for {query}."}
