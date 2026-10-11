@@ -143,6 +143,13 @@ def _research(query: str) -> Optional[Dict[str, Any]]:
 
 def _find_product(asin: str) -> Optional[Dict[str, Any]]:
     found = get_product(asin)
+    if found and found.get("lazy"):
+        # A name-only catalog entry: fill in dimensions and complaints by researching it now.
+        try:
+            return _research(found["title"]) or None
+        except RuntimeError as e:
+            print(f"⚠ research for {asin} failed: {e}")
+            return None
     if found or not web_research.is_research_id(asin):
         return found
     try:
@@ -222,7 +229,7 @@ def _research_summary(p: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "asin": p["asin"], "title": p["title"], "short_title": catalog_short_title(p["title"]),
         "category": p.get("category"), "price": p.get("price"), "review_count": 0,
-        "has_height": dims.get("height_cm") is not None, "source": "web",
+        "has_height": dims.get("height_cm") is not None, "source": "web", "lazy": False,
         "sources": (p.get("web_research") or {}).get("sources", []),
     }
 
@@ -1006,7 +1013,7 @@ def demo_ui():
     <section class="glass picker">
       <div class="picker-label">Or look up a product yourself</div>
       <form class="picker-row" id="searchForm">
-        <input id="productSearch" type="search" placeholder="Search products, e.g. air fryer" autocomplete="off" />
+        <input id="productSearch" type="search" placeholder="Search any product, e.g. Ninja air fryer" autocomplete="off" />
         <button class="btn" type="submit" id="searchBtn">Search</button>
       </form>
       <div id="searchResults" class="search-results" role="listbox" aria-label="Search results"></div>
@@ -1103,56 +1110,52 @@ def demo_ui():
     async function searchProducts(q) {
       const box = document.getElementById('searchResults');
       box.replaceChildren();
+      if (!q) return;
+      let data = { products: [], research_available: false };
       try {
-        const res = await fetch('/products?limit=8&q=' + encodeURIComponent(q || ''));
-        const data = await res.json();
-        if (!data.products.length) {
-          const d = document.createElement('div');
-          d.className = 'search-empty';
-          d.textContent = q ? 'Not in the catalog yet' + (data.research_available ? ', so I am looking it up online.' : '.') : 'The catalog is empty.';
-          box.append(d);
-          if (q && data.research_available) {
-            // Nothing local: go straight to live research instead of asking for another click.
-            const rb = researchButton(q);
-            box.append(rb);
-            researchProduct(q, rb);
-          }
-          return;
-        }
-        data.products.forEach(p => {
-          const b = document.createElement('button');
-          b.type = 'button'; b.className = 'result-item'; b.setAttribute('role', 'option');
-          b.setAttribute('aria-selected', 'false');
-          b.dataset.asin = p.asin; b.dataset.title = p.short_title || p.title;
-          b.textContent = p.short_title || p.title;
-          const sm = document.createElement('small');
-          sm.textContent = [p.category, p.price != null ? '$' + p.price : null].filter(Boolean).join(' · ');
-          b.append(sm);
-          b.addEventListener('click', () => selectProduct(b));
-          box.append(b);
-        });
-        if (q && data.research_available) box.append(researchButton(q));
-        else if (data.products.length === 1) selectProduct(box.firstChild);
-      } catch (e) {
+        const res = await fetch('/products?limit=5&q=' + encodeURIComponent(q));
+        data = await res.json();
+      } catch (e) { /* fall through to research */ }
+      data.products.forEach(p => {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'result-item'; b.setAttribute('role', 'option');
+        b.setAttribute('aria-selected', 'false');
+        b.dataset.asin = p.asin; b.dataset.title = p.short_title || p.title;
+        b.textContent = p.short_title || p.title;
+        const sm = document.createElement('small');
+        sm.textContent = [p.category, p.price != null ? '$' + p.price : null].filter(Boolean).join(' · ');
+        b.append(sm);
+        b.addEventListener('click', () => selectProduct(b));
+        box.append(b);
+      });
+      if (data.research_available) {
+        // Every search does a real web lookup, then analyzes what it found.
+        const rb = researchButton(q);
+        box.prepend(rb);
+        researchProduct(q, rb, true);
+      } else if (!data.products.length) {
         const d = document.createElement('div');
-        d.className = 'search-empty'; d.textContent = 'Search failed. Is the server running?';
+        d.className = 'search-empty';
+        d.textContent = 'No match. Live web search is not enabled on this server.';
         box.append(d);
+      } else if (data.products.length === 1) {
+        selectProduct(box.firstChild);
       }
     }
 
     function researchButton(q) {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'result-item research-item';
-      b.textContent = 'Not listed? Research "' + q + '" on the web';
+      b.textContent = 'Searching the web for "' + q + '"...';
       const sm = document.createElement('small');
-      sm.textContent = 'Live lookup with cited sources. Takes 10-20 seconds.';
+      sm.textContent = 'Reading current sources. Takes 10-20 seconds.';
       b.append(sm);
       b.addEventListener('click', () => researchProduct(q, b));
       return b;
     }
 
-    async function researchProduct(q, btn) {
-      btn.disabled = true; btn.firstChild.textContent = 'Researching "' + q + '" on the web...';
+    async function researchProduct(q, btn, thenAnalyze) {
+      btn.disabled = true; btn.firstChild.textContent = 'Searching the web for "' + q + '"...';
       try {
         const res = await fetch('/research?q=' + encodeURIComponent(q));
         const data = await res.json();
@@ -1169,8 +1172,9 @@ def demo_ui():
         item.addEventListener('click', () => selectProduct(item));
         btn.replaceWith(item);
         selectProduct(item);
+        if (thenAnalyze) runAnalysis();
       } catch (e) {
-        btn.disabled = false; btn.firstChild.textContent = e.message + ' Click to retry.';
+        btn.disabled = false; btn.firstChild.textContent = (e.message || 'Search failed') + '. Click to try again.';
       }
     }
 
@@ -1415,7 +1419,6 @@ def demo_ui():
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      searchProducts('');
       const input = document.getElementById('fitQuestion');
       if (input) {
         input.addEventListener('keydown', (e) => {

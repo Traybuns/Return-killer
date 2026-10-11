@@ -21,7 +21,7 @@ ENV BUILD_SHA=${BUILD_SHA} \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY analyzer.py app.py catalog.py research.py mcp_server.py sample_products.json ./
+COPY analyzer.py app.py catalog.py research.py mcp_server.py sample_products.json household_catalog.json ./
 COPY static ./static
 COPY data ./data
 

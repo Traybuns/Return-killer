@@ -28,6 +28,7 @@ def _candidate_paths() -> List[str]:
         paths.append(env)
     paths += [
         os.path.join(BASE, "data", "products.json"),
+        os.path.join(BASE, "household_catalog.json"),  # ~230 names, researched on demand
         os.path.join(BASE, "sample_products.json"),
     ]
     return paths
@@ -101,6 +102,7 @@ def summarize(p: Dict[str, Any]) -> Dict[str, Any]:
         "price": p.get("price"),
         "review_count": len(p.get("reviews") or []),
         "has_height": dims.get("height_cm") is not None,
+        "lazy": bool(p.get("lazy")),
     }
 
 
