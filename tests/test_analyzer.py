@@ -27,7 +27,7 @@ def make(fake):
 
 
 def board():
-    return load_sample_products(os.path.join(os.path.dirname(__file__), "..", "sample_products.json"))[0]
+    return load_sample_products(os.path.join(os.path.dirname(__file__), "fixtures", "sample_products.json"))[0]
 
 
 GOOD = {

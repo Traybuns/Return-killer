@@ -98,7 +98,7 @@ def test_seed_script_writes_resumable_catalog(tmp_path):
     spec.loader.exec_module(seed)
     from analyzer import ReturnKillerAnalyzer
     an = ReturnKillerAnalyzer(use_bedrock=False)
-    an.use_bedrock, an.bedrock_client = True, FakeBedrock(RAW)
+    an.use_bedrock, an.bedrock_client = True, FakeBedrock(dict(RAW, title="Air Fryer Toaster Oven Microwave Combo"))
     out = tmp_path / "p.json"
     seed.main(["--out", str(out), "--limit", "3", "--workers", "1"], analyzer=an)
     data = json.loads(out.read_text())
@@ -107,12 +107,16 @@ def test_seed_script_writes_resumable_catalog(tmp_path):
     seed.main(["--out", str(out), "--limit", "3", "--workers", "1"], analyzer=an)  # resume: nothing new
     assert len(an.bedrock_client.calls) == calls
     import catalog
+    prev = os.environ.get("RETURNKILLER_CATALOG")
     os.environ["RETURNKILLER_CATALOG"] = str(out)
     catalog.reload_catalog()
     try:
-        assert catalog.search_products("flexispot standing desk")["total"] >= 1
+        assert catalog.search_products("air fryer")["total"] >= 1
     finally:
-        del os.environ["RETURNKILLER_CATALOG"]
+        if prev is None:
+            os.environ.pop("RETURNKILLER_CATALOG", None)
+        else:
+            os.environ["RETURNKILLER_CATALOG"] = prev
         catalog.reload_catalog()
 
 
@@ -143,3 +147,8 @@ def test_throttling_is_reported_as_quota_not_failure(client):
     r = c.get("/research", params={"q": "standing desk"})
     assert r.status_code == 429 and "quota" in r.json()["detail"].lower()
     assert len(fake.calls) == 1  # stops after the first throttled attempt
+
+
+def test_names_the_product_guard():
+    assert research.names_the_product("Ninja Foodi 6-in-1 Air Fryer", "ninja foodi air fryer")
+    assert not research.names_the_product("Rolling Pin Wooden", "ninja foodi air fryer")

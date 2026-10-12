@@ -49,7 +49,7 @@ app.add_middleware(
 _use_bedrock = os.environ.get("RETURNKILLER_USE_BEDROCK", "").lower() in ("1", "true", "yes")
 analyzer = ReturnKillerAnalyzer(use_bedrock=_use_bedrock)
 
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Lambda request payloads cap at 6 MB
+MAX_IMAGE_BYTES = 4 * 1024 * 1024  # Lambda request payloads cap at 6 MB; Nova images ~3.75 MB
 
 # When deployed, CloudFront (and its WAF) must be the only way in. Terraform sets
 # ORIGIN_VERIFY and CloudFront sends it as a header; direct API Gateway hits are rejected.
@@ -341,7 +341,7 @@ async def scan_space(
 
     image_bytes = await file.read()
     if len(image_bytes) > MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
+        raise HTTPException(status_code=400, detail="That photo is too large. Try a smaller one.")
     if len(image_bytes) < 100:
         raise HTTPException(status_code=400, detail="Image file is empty")
 
@@ -1016,7 +1016,7 @@ def demo_ui():
     <section class="glass picker">
       <div class="picker-label">Or look up a product yourself</div>
       <form class="picker-row" id="searchForm">
-        <input id="productSearch" type="search" placeholder="Search any product, e.g. Ninja air fryer" autocomplete="off" />
+        <input id="productSearch" type="search" placeholder="Search any product, e.g. Ninja Foodi air fryer" autocomplete="off" />
         <button class="btn" type="submit" id="searchBtn">Search</button>
       </form>
       <div id="searchResults" class="search-results" role="listbox" aria-label="Search results"></div>
@@ -1116,37 +1116,10 @@ def demo_ui():
       const box = document.getElementById('searchResults');
       box.replaceChildren();
       if (!q) return;
-      let data = { products: [], research_available: false };
-      try {
-        const res = await fetch('/products?limit=5&q=' + encodeURIComponent(q));
-        data = await res.json();
-      } catch (e) { /* fall through to research */ }
-      if (seq !== searchSeq) return;  // a newer search superseded this one
-      data.products.forEach(p => {
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'result-item'; b.setAttribute('role', 'option');
-        b.setAttribute('aria-selected', 'false');
-        b.dataset.asin = p.asin; b.dataset.title = p.short_title || p.title;
-        b.textContent = p.short_title || p.title;
-        const sm = document.createElement('small');
-        sm.textContent = [p.category, p.price != null ? '$' + p.price : null].filter(Boolean).join(' · ');
-        b.append(sm);
-        b.addEventListener('click', () => selectProduct(b));
-        box.append(b);
-      });
-      if (data.research_available) {
-        // Every search does a real web lookup, then analyzes what it found.
-        const rb = researchButton(q);
-        box.prepend(rb);
-        researchProduct(q, rb, true);
-      } else if (!data.products.length) {
-        const d = document.createElement('div');
-        d.className = 'search-empty';
-        d.textContent = 'No match. Live web search is not enabled on this server.';
-        box.append(d);
-      } else if (data.products.length === 1) {
-        selectProduct(box.firstChild);
-      }
+      // Every search is a live web lookup (Amazon first), then the analysis of what it found.
+      const rb = researchButton(q);
+      box.append(rb);
+      researchProduct(q, rb, true);
     }
 
     function researchButton(q) {
@@ -1454,7 +1427,7 @@ def _research_summary_for(query: str) -> Optional[Dict[str, Any]]:
     return _research_summary(product) if product else None
 
 
-_mcp = build_mcp(_find_product, _get_analysis, search_products, _research_summary_for)
+_mcp = build_mcp(_find_product, _get_analysis, _research_summary_for)
 app.mount("/", _mcp.streamable_http_app())
 
 

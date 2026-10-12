@@ -1,9 +1,9 @@
-"""Product catalog: real products when available, the 2 demo samples otherwise.
+"""Optional product catalog. There is NO built-in product data: by default the catalog is empty
+and every product comes from live web research (research.py).
 
-Lookup order for the data file:
-  1. $RETURNKILLER_CATALOG (explicit path)
-  2. data/products.json   (built by scripts/ingest_amazon_reviews.py; not committed)
-  3. sample_products.json (two hand-written demo products)
+A catalog only exists if you build one:
+  1. $RETURNKILLER_CATALOG (explicit path), or
+  2. data/products.json (built by scripts/ingest_amazon_reviews.py; not committed)
 
 The file is read once per process and indexed by ASIN.
 """
@@ -28,8 +28,6 @@ def _candidate_paths() -> List[str]:
         paths.append(env)
     paths += [
         os.path.join(BASE, "data", "products.json"),
-        os.path.join(BASE, "household_catalog.json"),  # ~230 names, researched on demand
-        os.path.join(BASE, "sample_products.json"),
     ]
     return paths
 
@@ -74,10 +72,12 @@ def load_catalog() -> Dict[str, Any]:
             "by_asin": index,
             "tokens": tokens,
             "path": path,
-            "source": meta.get("source") or ("sample" if path.endswith("sample_products.json") else "custom"),
+            "source": meta.get("source") or "custom",
             "meta": meta,
         }
-    raise RuntimeError(f"No usable product catalog found (last error: {last_err})")
+    if last_err:
+        print(f"⚠ catalog file unreadable, continuing with an empty catalog: {last_err}")
+    return {"products": [], "by_asin": {}, "tokens": {}, "path": None, "source": "none", "meta": {}}
 
 
 def reload_catalog() -> None:

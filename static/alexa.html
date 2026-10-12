@@ -67,7 +67,7 @@
     <button type="button" class="mic" id="mic" title="Speak" aria-label="Speak">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
     </button>
-    <input type="text" id="input" placeholder="Ask about any product, like “will a Ninja air fryer fit under my cabinet?”" autocomplete="off" aria-label="Message">
+    <input type="text" id="input" placeholder="Name a product and ask, like “will a standing desk fit by my window?”" autocomplete="off" aria-label="Message">
     <button class="send" type="submit" id="send">Ask</button>
   </form>
   <div id="debug"></div>
@@ -136,11 +136,23 @@
     chat.scrollTop = chat.scrollHeight;
     return m;
   }
+  // Long utterances stall in Chrome and voices load asynchronously, so speak sentence by sentence.
   function speak(text) {
     if (!$('speak').checked || !('speechSynthesis' in window)) return;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    try {
+      speechSynthesis.cancel();
+      const parts = String(text).match(/[^.!?]+[.!?]*/g) || [String(text)];
+      const voice = speechSynthesis.getVoices().find(v => /^en/i.test(v.lang));
+      for (const part of parts) {
+        const t = part.trim(); if (!t) continue;
+        const u = new SpeechSynthesisUtterance(t);
+        if (voice) u.voice = voice;
+        u.lang = (voice && voice.lang) || 'en-US';
+        speechSynthesis.speak(u);
+      }
+    } catch (e) { /* speech is a nicety; the text is already on screen */ }
   }
+  if ('speechSynthesis' in window) speechSynthesis.getVoices();
   function say(text) { addMsg('alexa', text); speak(text); }
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   async function withTyping(label, fn) {
@@ -149,8 +161,11 @@
   }
 
   // ---- stand-in intent router (Alexa+ would supply this) ----
-  const MEASURE = /\d+(\.\d+)?\s*(cm|centimet|mm|inch|in\b|"|ft|feet|m\b)/i;
-  const FILLER = /\b(will|would|does|do|can|could|the|a|an|my|me|it|is|are|fit|fits|under|over|in|on|cabinet|clearance|space|shelf|tall|height|how|risky|risk|return|returned|safe|worth|buying|buy|review|reviews|complain|problem|check|find|search|for|about|tell|whether|should|i|of|to|inches|inch|cm|centimeter|centimeters|feet|\d+(\.\d+)?)\b/g;
+  // Answers only what was asked: fit -> check_fit, risk -> analyze_listing, a bare product name -> look it up.
+  const MEASURE = /\d+(\.\d+)?\s*(cm|centimet\w*|mm|millimet\w*|inch\w*|in\b|"|ft|feet|foot|m\b|meters?)/i;
+  const FIT = /\b(fit|fits|fitting|under|clearance|space|shelf|tall|height|wide|width|room|cabinet|spot)\b/;
+  const RISK = /\b(risk|risky|return|returned|returns|safe|worth|review|reviews|complain|complaints|problem|problems|issues?)\b/;
+  const FILLER = /\b(will|would|does|do|can|could|the|a|an|my|me|it|its|is|are|was|fit|fits|fitting|under|over|in|on|at|of|to|for|about|with|cabinet|clearance|space|shelf|tall|height|wide|width|room|spot|how|risky|risk|return|returned|returns|safe|worth|buying|buy|review|reviews|complain|complaints|problem|problems|issues?|check|find|search|tell|whether|should|i|we|you|please|hey|alexa|if|this|that|there|any|some|much|many|and|or|what|whats|which|good|bad|likely|centimeters?|centimetres?|inches|inch|cm|mm|feet|foot|ft|meters?|\d+(\.\d+)?)\b/g;
   function findProduct(u) {
     let best = null, bestScore = 0;
     for (const p of products) {
@@ -158,20 +173,16 @@
       const score = words.filter(w => u.includes(w)).length;
       if (score > bestScore) { best = p; bestScore = score; }
     }
-    return best;
+    return bestScore >= 2 || (best && bestScore === 1 && (best.short_title || best.title).split(/\s+/).length <= 2) ? best : null;
   }
-  async function lookup(u) {
-    // Not in the loaded shortlist: catalog search first, then live web research.
-    const q = u.replace(FILLER, ' ').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!q) return null;
-    const r = await callTool('search_products', { query: q, limit: 3 });
-    let top = (r.products || [])[0];
-    if (!top) {
-      const w = await withTyping('Not in my catalog. Looking it up online…', () => callTool('research_product', { query: q }));
-      if (!w.product) { say(w.spoken); return null; }
-      top = w.product;
-      say(w.spoken);
-    }
+  function productPhrase(u) {
+    return u.replace(FILLER, ' ').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  async function lookup(q) {
+    // Every product is looked up live on the web (Amazon first).
+    const w = await withTyping('Searching Amazon and the web…', () => callTool('research_product', { query: q }));
+    if (!w.product) { say(w.spoken); return null; }
+    const top = w.product;
     if (!products.some(p => p.asin === top.asin)) products.push(top);
     return top;
   }
@@ -181,18 +192,25 @@
     addMsg('user', utterance);
     const u = utterance.toLowerCase();
     try {
-      const generic = /what can you|which products|list|what products|what do you/.test(u);
-      let mentioned = findProduct(u);
-      if (!mentioned && !generic) mentioned = await lookup(u);
-      if (mentioned) remember(mentioned);
-
-      if (generic) { const r = await callTool('list_products'); say(r.spoken); return; }
       const hasSpace = MEASURE.test(u);
-      const wantsFit = /fit|under|cabinet|clearance|space|shelf|tall|height/.test(u) || (pendingFit && hasSpace);
-      const wantsRisk = /risk|return|safe|worth|review|complain|problem|buy/.test(u);
+      const wantsFit = FIT.test(u) || (pendingFit && hasSpace);
+      const wantsRisk = RISK.test(u);
+      const phrase = productPhrase(u.replace(/['’]s\b/g, ''));
+      const lookupVerb = /\b(find|search|look up|lookup|check|about|buy|buying|get|show)\b/.test(u);
+      const bareName = phrase.split(' ').length <= 6 && !/^(what|who|when|where|why|how|is|are|do|does|did|can|tell|hi|hello|hey|thanks|thank)\b/.test(u);
+      let named = false;
 
-      if (!lastAsin && (wantsFit || wantsRisk)) {
-        say('Which product? Name it, like “the Ninja air fryer” or “a standing desk”.'); return;
+      if (phrase.length >= 3 && (wantsFit || wantsRisk || lookupVerb || bareName)) {
+        let p = findProduct(u);
+        if (!p) p = await lookup(phrase);
+        if (!p) return;                     // lookup already explained why
+        remember(p); named = true;
+      }
+      if (!lastAsin) {
+        say(wantsFit || wantsRisk
+          ? 'Which product? Name it, like “Ninja Foodi air fryer” or “IKEA Kallax shelf”.'
+          : 'I check whether an Amazon product will fit your space or how likely it is to be returned. Name a product to start.');
+        return;
       }
       if (wantsFit) {
         // A photo scan stands in for a typed measurement.
@@ -205,25 +223,39 @@
         const r = await callTool('analyze_listing', { asin: lastAsin });
         pendingFit = false; say(r.spoken); return;
       }
-      say('I can check whether a product will fit your space, or how likely it is to be returned. Try: will the air fryer fit under my 40 centimeter cabinet?');
+      if (named) { say(`Found ${lastTitle}. Ask me if it will fit your space, or how likely it is to be returned.`); return; }
+      say('I can only check whether a product will fit your space, or how likely it is to be returned.');
     } catch (e) {
       say('Sorry, I could not reach ReturnKiller. ' + e.message);
     }
   }
 
   // ---- photo of the space ----
+  // Phone photos are several MB; shrink to ~1600px JPEG so the upload stays well under server limits.
+  async function downscale(file) {
+    try {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+      return blob && blob.size < file.size ? blob : (file.size < 3.5e6 ? file : (blob || file));
+    } catch { return file; }
+  }
   async function scanPhoto(file) {
     if (!file) return;
     const img = el('img'); img.alt = 'Your photo'; img.src = URL.createObjectURL(file);
     addMsg('user', '', img);
     const form = new FormData();
-    form.append('file', file);
+    const small = await downscale(file);
+    form.append('file', small, 'space.jpg');
     if (lastAsin) form.append('asin', lastAsin);
     try {
       const data = await withTyping('Looking at your space…', async () => {
         const res = await fetch('/scan', { method: 'POST', body: form });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body.detail || 'The scan failed');
+        if (!res.ok) throw new Error(res.status === 413 ? 'That photo is too large.' : (typeof body.detail === 'string' ? body.detail : 'The scan failed.'));
         return body;
       });
       if (data.estimated_clearance_height_cm != null) scanCm = data.estimated_clearance_height_cm;
@@ -232,7 +264,7 @@
       if (!lastAsin) text += ' Tell me which product to check against it.';
       say(text);
     } catch (e) {
-      say(e.message + ' Try a clearer, well-lit photo.');
+      say(e.message + ' Try a smaller or clearer, well-lit photo.');
     }
   }
   $('scanBtn').addEventListener('click', () => $('fileScan').click());
@@ -258,22 +290,35 @@
   });
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
-    const rec = new SR(); rec.lang = 'en-US'; rec.interimResults = false;
-    rec.onresult = (ev) => handle(ev.results[0][0].transcript);
-    rec.onend = () => $('mic').classList.remove('live');
-    rec.onerror = () => $('mic').classList.remove('live');
-    $('mic').addEventListener('click', () => { speechSynthesis.cancel(); $('mic').classList.add('live'); rec.start(); });
+    let rec = null, listening = false;
+    const stop = () => { listening = false; $('mic').classList.remove('live'); };
+    const ERR = {
+      'not-allowed': 'Microphone access is blocked. Allow the microphone for this site in your browser, then try again.',
+      'service-not-allowed': 'Microphone access is blocked. Allow the microphone for this site in your browser, then try again.',
+      'no-speech': 'I did not hear anything. Tap the mic and try again.',
+      'audio-capture': 'I could not find a microphone.',
+      'network': 'Voice recognition needs an internet connection. Type your question instead.',
+    };
+    $('mic').addEventListener('click', () => {
+      if (listening) { try { rec.stop(); } catch {} return; }
+      try { speechSynthesis.cancel(); } catch {}
+      rec = new SR(); rec.lang = 'en-US'; rec.interimResults = false; rec.maxAlternatives = 1;
+      let heard = false;
+      rec.onresult = (ev) => { heard = true; const t = ev.results[0][0].transcript.trim(); if (t) handle(t); };
+      rec.onerror = (ev) => { stop(); addMsg('alexa', ERR[ev.error] || 'Voice input failed (' + ev.error + '). Type your question instead.'); heard = true; };
+      rec.onend = () => { if (!heard) addMsg('alexa', ERR['no-speech']); stop(); };
+      try { rec.start(); listening = true; $('mic').classList.add('live'); }
+      catch (e) { stop(); addMsg('alexa', 'I could not start the microphone. ' + e.message); }
+    });
   } else {
     $('mic').disabled = true; $('mic').title = 'Voice input is not supported in this browser';
   }
 
   async function boot() {
-    ['Will the air fryer fit under my 40 cm cabinet?', 'How risky is the cutting board?', 'What can you check?'].forEach(t => {
+    ['Will a Ninja air fryer fit under a 40 cm cabinet?', 'How risky is an IKEA Kallax shelf?', 'What can you check?'].forEach(t => {
       const b = el('button', 'chip', t); b.type = 'button'; b.onclick = () => handle(t); $('chips').append(b);
     });
-    say('Hi, I\'m Alexa with ReturnKiller. Tell me the product and the space you have, or send a photo of the space, and I\'ll say whether it will fit before you order.');
-    try { await ensureInit(); const r = await callTool('list_products'); products = r.products || []; }
-    catch (e) { say('I could not connect to the ReturnKiller server. ' + e.message); }
+    say('Hi, I\'m Alexa with ReturnKiller. Name a product and the space you have, or send a photo of the space, and I\'ll say whether it will fit before you order.');
   }
   boot();
 })();
