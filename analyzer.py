@@ -69,9 +69,12 @@ class ReturnKillerAnalyzer:
         if use_bedrock:
             try:
                 import boto3
+                from botocore.config import Config
                 self.bedrock_client = boto3.client(
                     "bedrock-runtime",
-                    region_name=region
+                    region_name=region,
+                    config=Config(retries={"max_attempts": 2, "mode": "standard"},
+                                  connect_timeout=5, read_timeout=26),
                 )
                 print("✓ Bedrock client initialized")
             except Exception as e:
@@ -97,7 +100,7 @@ class ReturnKillerAnalyzer:
         """Make a tiny real Bedrock call so a missing permission shows up immediately."""
         if not self.use_bedrock or not self.bedrock_client:
             return {"bedrock": "disabled", "ok": True}
-        last_err = None
+        errors = []
         for model_id in self._model_ids():
             try:
                 self.bedrock_client.converse(
@@ -107,8 +110,8 @@ class ReturnKillerAnalyzer:
                 )
                 return {"bedrock": "ok", "model_id": model_id, "region": self.region, "ok": True}
             except Exception as e:
-                last_err = e
-        return {"bedrock": "error", "error": str(last_err)[:300], "region": self.region, "ok": False}
+                errors.append(f"{model_id}: {e}")
+        return {"bedrock": "error", "error": " | ".join(errors)[:500], "region": self.region, "ok": False}
 
     def analyze_product(self, product: Dict[str, Any]) -> AnalysisResult:
         """Main entry point - analyze a product and return insights.
@@ -655,35 +658,16 @@ Rules:
         title = product.get("title", "this product")
         short_name = title.split(" - ")[0].split(",")[0]
         
-        if not dimensions:
+        dims = {k: dimensions.get(k) for k in ("length_cm", "width_cm", "height_cm") if dimensions and dimensions.get(k)}
+        if not dims:
             return (
-                f"I don't have exact dimensions for the {short_name} yet. "
-                "I recommend checking the product detail page for the size chart, "
-                "or measuring the space where you plan to put it."
+                f"I couldn't find reliable dimensions for the {short_name}. "
+                "Check the size chart on the listing, and tell me the space you have so I can compare."
             )
-        
-        l = dimensions.get("length_cm", 0)
-        w = dimensions.get("width_cm", 0)
-        h = dimensions.get("height_cm", 0)
-        
-        response = (
-            f"The {short_name} measures {l:.0f} by {w:.0f} by {h:.0f} centimeters. "
-            f"That's about {l/2.54:.1f} inches long. "
-        )
-        
-        # Add practical guidance
-        if h > 30:
-            response += (
-                f"It is {h:.0f} cm tall, so check that you have enough clearance under your cabinets. "
-                "Most standard cabinets have about 45 to 50 cm of space. "
-            )
-        
-        response += (
-            "I've put a size comparison on the screen so you can see how it relates to everyday objects. "
-            "Would you like me to compare it to a specific space in your home?"
-        )
-        
-        return response
+        names = {"length_cm": "long", "width_cm": "wide", "height_cm": "tall"}
+        parts = [f"{v:.0f} cm {names[k]} ({v/2.54:.1f} in)" for k, v in dims.items()]
+        # Only what the data says. No generic advice, no claims about what is on a screen.
+        return f"The {short_name} is about " + ", ".join(parts) + ". Tell me the space you have and I'll check if it fits."
 
     def _generate_visual_suggestions(self, size_issues: List[SizeIssue], dimensions: Dict) -> List[str]:
         """Suggest visual assets that would reduce returns."""
@@ -1008,38 +992,12 @@ Rules:
         }
 
 
-def load_sample_products(path: str = None) -> List[Dict]:
-    """Load sample products from JSON (supports flat repo or backend/ layout)."""
-    if path is None:
-        base = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            os.path.join(base, "data", "sample_products.json"),
-            os.path.join(base, "..", "data", "sample_products.json"),
-            os.path.join(base, "sample_products.json"),
-        ]
-        path = next((c for c in candidates if os.path.isfile(c)), candidates[0])
+def load_sample_products(path: str) -> List[Dict]:
+    """Load products from a JSON file (used by tests and tooling; the app ships no sample data)."""
     with open(path) as f:
         data = json.load(f)
     return data["products"]
 
-
-if __name__ == "__main__":
-    # Quick self-test
-    analyzer = ReturnKillerAnalyzer(use_bedrock=False)
-    products = load_sample_products()
-    
-    print("=" * 60)
-    print("ReturnKiller Analysis Engine - Self Test")
-    print("=" * 60)
-    
-    for product in products:
-        print(f"\n📦 Analyzing: {product['title'][:50]}...")
-        result = analyzer.analyze_product(product)
-        print(f"   Risk Score: {result.return_risk_score}/100")
-        print(f"   Complaints found: {len(result.top_complaints)}")
-        print(f"   Size issues: {len(result.size_issues)}")
-        print(f"\n{result.summary}")
-        print("-" * 40)
 
 # ----------------------------------------------------------------------
 # Fit check: pure code, no model. A voice answer about measurements must be

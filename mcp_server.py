@@ -21,16 +21,16 @@ def _level(score: float) -> str:
 def build_mcp(
     get_product: Callable[[str], Optional[Dict[str, Any]]],
     get_analysis: Callable[[str], Dict[str, Any]],
-    search: Callable[..., Dict[str, Any]],
-    research: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+    research: Callable[[str], Optional[Dict[str, Any]]],
 ) -> FastMCP:
     mcp = FastMCP(
         "ReturnKiller",
         instructions=(
-            "ReturnKiller tells shoppers whether an Amazon product will actually fit or match "
-            "their expectations before they order, so they don't have to return it. Call "
-            "search_products to find a product by name (if it returns nothing, call research_product, which looks it up on the web), check_fit when the shopper describes a "
-            "space, and analyze_listing for return risk. Read the 'spoken' field aloud."
+            "ReturnKiller tells shoppers whether an Amazon product will fit their space or match "
+            "the listing before they order, so they don't have to return it. Every product is "
+            "looked up live on the web. Call research_product with the product the shopper named, "
+            "then check_fit when they describe a space, or analyze_listing for return risk. "
+            "Answer only what the shopper asked. Read the 'spoken' field aloud."
         ),
         stateless_http=True,
         json_response=True,
@@ -39,48 +39,20 @@ def build_mcp(
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
-    def _find(query: str, limit: int) -> Dict[str, Any]:
-        limit = max(1, min(int(limit), 5))
-        res = search(query, limit=limit)
-        items = [
-            {k: p[k] for k in ("asin", "short_title", "category", "price", "has_height")}
-            for p in res["products"]
-        ]
-        total = res["total"]
-        if not items:
-            spoken = f"I couldn't find anything matching {query}." if query else "I have no products loaded."
-        else:
-            names = "; ".join(p["short_title"] for p in items)
-            more = f" There are {total} matches in all." if total > len(items) else ""
-            spoken = f"I found {total} matching product{'s' if total != 1 else ''}. Top: {names}.{more}"
-        return {"total": total, "products": items, "spoken": spoken}
-
-    @mcp.tool(name="search_products", annotations=READ_ONLY)
-    def search_products_tool(query: str = "", limit: int = 5) -> Dict[str, Any]:
-        """Search the catalog by product name or category, e.g. 'air fryer'.
-        Returns at most 5 products with their ASINs."""
-        return _find(query, limit)
-
     @mcp.tool(name="research_product", annotations=ToolAnnotations(
         readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True))
     def research_product_tool(query: str) -> Dict[str, Any]:
-        """Look up ANY product on the web when it is not in the catalog. Slower (up to ~20 s).
-        Returns the product with an ASIN-like id usable by check_fit and analyze_listing."""
-        if research is None:
-            return {"product": None, "spoken": "Web research is not available right now."}
+        """Look up a product on Amazon and the web (can take up to ~20 s). Returns the product
+        with an id usable by check_fit and analyze_listing."""
         try:
             product = research(query)
-        except RuntimeError:
+        except RuntimeError as e:
+            if "quota" in str(e).lower():
+                return {"product": None, "spoken": str(e)}
             return {"product": None, "spoken": "I couldn't reach my web research right now. Please try again."}
         if not product:
-            return {"product": None, "spoken": f"I couldn't identify a product for {query}."}
-        return {"product": product,
-                "spoken": f"I found {product['short_title']} online. Ask me whether it will fit, or how risky it is."}
-
-    @mcp.tool(name="list_products", annotations=READ_ONLY)
-    def list_products_tool(limit: int = 5) -> Dict[str, Any]:
-        """List the most-reviewed products ReturnKiller can check (max 5)."""
-        return _find("", limit)
+            return {"product": None, "spoken": f"I couldn't find a product called {query}. Try the full product name."}
+        return {"product": product, "spoken": f"I found {product['short_title']}."}
 
     @mcp.tool(annotations=READ_ONLY)
     def check_fit(asin: str, space_description: str = "") -> Dict[str, Any]:
