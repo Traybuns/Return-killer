@@ -19,7 +19,7 @@ ENV BUILD_SHA=${BUILD_SHA} \
     RETURNKILLER_USE_BEDROCK=1
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=120 --retries=10 -r requirements.txt
 
 COPY analyzer.py app.py catalog.py research.py mcp_server.py ./
 COPY static ./static

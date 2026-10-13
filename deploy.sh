@@ -14,7 +14,6 @@ REGISTRY="${REPO_URL%%/*}"
 
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
 SHA="$(git -C .. rev-parse --short HEAD 2>/dev/null || echo unknown)"
-test -f ../data/products.json || echo "WARNING: data/products.json missing; the app will ship with the 2 demo products only." >&2
 docker buildx build --platform linux/arm64 --provenance=false --build-arg "BUILD_SHA=${SHA}" -t "${REPO_URL}:${TAG}" --push ..
 
 terraform apply -input=false -auto-approve -var "image_tag=${TAG}"

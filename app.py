@@ -466,6 +466,13 @@ def demo_ui():
         0 8px 24px var(--accent-glow);
     }
 
+    .header-ask { margin-bottom: 0; padding: 14px 28px; font-size: 1.05rem; flex: none; }
+    @media (max-width: 480px) { .header-ask { padding: 12px 18px; font-size: .95rem; } .logo { font-size: 1.05rem; } }
+    .modal .endpoint { display: flex; gap: 8px; align-items: center; margin-top: 12px; background: rgba(0,0,0,0.35); border-radius: 14px; padding: 10px 12px; font: .8rem ui-monospace, Menlo, monospace; word-break: break-all; text-align: left; }
+    .modal .endpoint span { flex: 1; }
+    .modal .small { font-size: .8rem; margin: 14px 0 18px; }
+    .modal-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 14px 0 6px; text-align: left; }
+
     /* Glass card base */
     .glass {
       background: var(--glass);
@@ -1002,6 +1009,10 @@ def demo_ui():
         <div class="logo-mark">🛡️</div>
         ReturnKiller
       </div>
+      <button type="button" class="ask-alexa-btn header-ask" onclick="openAlexa()" aria-haspopup="dialog">
+        <span class="mic" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/></svg></span>
+        Ask Alexa
+      </button>
     </header>
 
     <section class="hero">
@@ -1089,11 +1100,15 @@ def demo_ui():
   <!-- Alexa connect modal -->
   <div class="modal-backdrop" id="alexaModal" onclick="closeAlexaBackdrop(event)">
     <div class="glass modal" onclick="event.stopPropagation()">
-      <h3>Ask Alexa</h3>
-      <p>Say this on any Echo device, or open the Alexa app and try it there.</p>
+      <h3>Ask Alexa from anywhere</h3>
+      <p>Once Alexa+ is connected to ReturnKiller, ask on your Echo or in the Alexa app without opening this site.</p>
+      <div class="modal-label">Say</div>
       <div class="phrase" id="alexaPhrase">“Alexa, ask Return Killer if this will fit under my cabinet”</div>
+      <div class="modal-label">Connect Alexa+ to this server (MCP)</div>
+      <div class="endpoint"><span id="mcpUrl"></span><button class="btn btn-soft" style="width:auto;padding:8px 14px" onclick="copyText('mcpUrl', this)">Copy</button></div>
+      <p class="small">This page uses a simulated Alexa+. No Echo is needed to try it above. Real devices reach ReturnKiller through the MCP endpoint, which exposes the same lookup, fit and risk tools.</p>
       <div class="modal-actions">
-        <button class="btn" onclick="copyPhrase()">Copy phrase</button>
+        <button class="btn" onclick="copyText('alexaPhrase', this)">Copy phrase</button>
         <button class="btn btn-soft" onclick="tryAlexaApp()">Open Alexa app</button>
         <button class="btn btn-soft" onclick="closeAlexa()">Close</button>
       </div>
@@ -1321,15 +1336,13 @@ def demo_ui():
     function closeAlexaBackdrop(e) {
       if (e.target === document.getElementById('alexaModal')) closeAlexa();
     }
-    function copyPhrase() {
-      const text = document.getElementById('alexaPhrase').textContent.replace(/[“”]/g, '');
-      navigator.clipboard.writeText(text).then(() => {
-        const btn = event.target;
-        const prev = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = prev; }, 1500);
-      });
+    function copyText(id, btn) {
+      const text = document.getElementById(id).textContent.replace(/[“”]/g, '');
+      const prev = btn.textContent;
+      const done = (m) => { btn.textContent = m; setTimeout(() => { btn.textContent = prev; }, 1500); };
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => done('Copied!'), () => done('Press Ctrl+C'));
     }
+    document.getElementById('mcpUrl').textContent = location.origin + '/mcp';
     function tryAlexaApp() {
       // Deep link attempts — works when Alexa app is installed
       // Skill invocation isn't universally linkable pre-publish; this opens Alexa
