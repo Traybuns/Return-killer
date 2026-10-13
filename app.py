@@ -443,7 +443,14 @@ def demo_ui():
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 10px;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      margin: 0 -8px 10px;
+      padding: 10px 8px;
+      background: linear-gradient(to bottom, rgba(7,10,15,0.94) 55%, rgba(7,10,15,0));
+      backdrop-filter: blur(10px);
     }
     .logo {
       display: flex;
@@ -672,7 +679,89 @@ def demo_ui():
       height: 22px;
       display: grid;
       place-items: center;
+      flex: none;
     }
+    .ask-alexa-btn .ask-copy {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      line-height: 1.15;
+      text-align: left;
+    }
+    .ask-alexa-btn .ask-label { font-weight: 800; letter-spacing: -0.02em; }
+    .ask-alexa-btn .ask-sub {
+      font-size: 0.68rem;
+      font-weight: 600;
+      opacity: 0.88;
+    }
+    .header-ask {
+      margin-bottom: 0;
+      padding: 11px 18px 11px 14px;
+      font-size: 0.98rem;
+      border-radius: 18px;
+      animation: alexa-glow 2.6s ease-in-out infinite;
+    }
+    @keyframes alexa-glow {
+      0%, 100% { box-shadow: 0 0 0 1px rgba(255,255,255,0.25) inset, 0 8px 28px rgba(0,140,255,0.45); }
+      50% { box-shadow: 0 0 0 1px rgba(255,255,255,0.4) inset, 0 10px 36px rgba(0,190,255,0.8); }
+    }
+    @media (max-width: 640px) {
+      .header { flex-wrap: wrap; }
+      .header-ask { width: 100%; justify-content: center; }
+      .header-ask .ask-copy { align-items: center; text-align: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .header-ask { animation: none; }
+    }
+    .modal.connect-modal { max-width: 460px; text-align: left; }
+    .connect-head { text-align: center; margin-bottom: 16px; }
+    .modal.connect-modal .connect-head h3 { margin-bottom: 8px; }
+    .modal.connect-modal .connect-head p { margin-bottom: 0; }
+    .connect-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #7ad7ff;
+      margin-bottom: 8px;
+    }
+    .connect-kicker .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: linear-gradient(135deg, #00caff, #0066ff);
+      box-shadow: 0 0 10px #00caff;
+    }
+    .connect-steps {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .connect-steps li {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      background: rgba(0,0,0,0.28);
+      border: 1px solid var(--glass-border);
+      border-radius: 14px;
+      padding: 10px 12px;
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      line-height: 1.45;
+    }
+    .connect-steps li strong { color: var(--text); }
+    .connect-steps .n {
+      flex: none;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      font-size: 0.75rem; font-weight: 800; color: #fff;
+      background: linear-gradient(135deg, #00caff, #0066ff);
+    }
+    .modal-actions .ask-alexa-btn { width: 100%; margin-bottom: 0; padding: 14px 20px; font-size: 1rem; }
     .alexa-hint {
       font-size: 0.82rem;
       color: var(--muted);
@@ -932,6 +1021,7 @@ def demo_ui():
       line-height: 1.55;
     }
     .modal .phrase {
+      text-align: center;
       background: rgba(0,0,0,0.35);
       border-radius: 14px;
       padding: 14px 16px;
@@ -1002,6 +1092,15 @@ def demo_ui():
         <div class="logo-mark">🛡️</div>
         ReturnKiller
       </div>
+      <button type="button" class="ask-alexa-btn header-ask" onclick="openAlexa()">
+        <span class="mic" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+        </span>
+        <span class="ask-copy">
+          <span class="ask-label">Ask Alexa</span>
+          <span class="ask-sub">Connect your devices</span>
+        </span>
+      </button>
     </header>
 
     <section class="hero">
@@ -1088,14 +1187,22 @@ def demo_ui():
 
   <!-- Alexa connect modal -->
   <div class="modal-backdrop" id="alexaModal" onclick="closeAlexaBackdrop(event)">
-    <div class="glass modal" onclick="event.stopPropagation()">
-      <h3>Ask Alexa</h3>
-      <p>Say this on any Echo device, or open the Alexa app and try it there.</p>
+    <div class="glass modal connect-modal" onclick="event.stopPropagation()">
+      <div class="connect-head">
+        <div class="connect-kicker"><span class="dot"></span> Your existing devices</div>
+        <h3>Connect Alexa</h3>
+        <p>Enable Return Killer once on the Amazon account your speakers already use. Every Echo, Echo Show, and Alexa device on that account can answer. Nothing new to buy or pair.</p>
+      </div>
+      <ol class="connect-steps">
+        <li><span class="n">1</span><div><strong>Open the Alexa app</strong> with the same Amazon account as the devices in your home.</div></li>
+        <li><span class="n">2</span><div><strong>Enable Return Killer.</strong> Skills & Games → search “Return Killer” → Enable. That links the skill to those devices.</div></li>
+        <li><span class="n">3</span><div><strong>Ask any of them.</strong> They all get it together. No per-speaker setup.</div></li>
+      </ol>
       <div class="phrase" id="alexaPhrase">“Alexa, ask Return Killer if this will fit under my cabinet”</div>
       <div class="modal-actions">
-        <button class="btn" onclick="copyPhrase()">Copy phrase</button>
-        <button class="btn btn-soft" onclick="tryAlexaApp()">Open Alexa app</button>
-        <button class="btn btn-soft" onclick="closeAlexa()">Close</button>
+        <button type="button" class="ask-alexa-btn" onclick="tryAlexaApp()">Open Alexa app</button>
+        <button type="button" class="btn btn-soft" onclick="copyPhrase()">Copy phrase</button>
+        <button type="button" class="btn btn-soft" onclick="closeAlexa()">Close</button>
       </div>
     </div>
   </div>
@@ -1331,14 +1438,12 @@ def demo_ui():
       });
     }
     function tryAlexaApp() {
-      // Deep link attempts — works when Alexa app is installed
-      // Skill invocation isn't universally linkable pre-publish; this opens Alexa
-      const phrase = encodeURIComponent(
-        document.getElementById('alexaPhrase').textContent.replace(/[“”]/g, '')
-      );
-      // Try Alexa app schemes (best-effort)
-      window.location.href = 'https://alexa.amazon.com/';
-      // Fallback note is already in the modal
+      // Skills library in the Alexa app / alexa.amazon.com. Enable once;
+      // every Echo already on that Amazon account picks the skill up.
+      const url = 'https://alexa.amazon.com/spa/index.html#skills';
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile) window.location.href = url;
+      else window.open(url, '_blank', 'noopener,noreferrer');
     }
 
     async function onSpacePhoto(event) {
