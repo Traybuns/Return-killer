@@ -159,6 +159,18 @@ def _find_product(asin: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _fit_product(asin: str) -> Optional[Dict[str, Any]]:
+    """Product for a fit check. If web research found no height, do one focused dimension lookup
+    (only when someone actually asks about fit) and cache it."""
+    product = _find_product(asin)
+    if product and product.get("source") == "web" and not (product.get("dimensions") or {}).get("height_cm"):
+        dims = web_research.research_dimensions(analyzer, product["title"])
+        if dims:
+            product = {**product, "dimensions": {**(product.get("dimensions") or {}), **dims}}
+            analysis_cache[f"product:{asin}"] = product
+    return product
+
+
 def _get_analysis(asin: str) -> Optional[Dict[str, Any]]:
     cached = analysis_cache.get(asin)
     if cached:
@@ -297,7 +309,7 @@ def analyze_custom(req: AnalyzeRequest):
 def fit_question(req: FitQuestion):
     """Simulate an Alexa 'will it fit?' interaction."""
     
-    product = _find_product(req.asin)
+    product = _fit_product(req.asin)
     analysis = _get_analysis(req.asin)
     if not product or not analysis:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -1532,7 +1544,7 @@ def _research_summary_for(query: str) -> Optional[Dict[str, Any]]:
     return _research_summary(product) if product else None
 
 
-_mcp = build_mcp(_find_product, _get_analysis, _research_summary_for)
+_mcp = build_mcp(_fit_product, _get_analysis, _research_summary_for)
 app.mount("/", _mcp.streamable_http_app())
 
 
