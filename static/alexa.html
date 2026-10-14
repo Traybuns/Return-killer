@@ -67,7 +67,7 @@
     <button type="button" class="mic" id="mic" title="Speak" aria-label="Speak">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
     </button>
-    <input type="text" id="input" placeholder="Name a product and ask, like “will a standing desk fit by my window?”" autocomplete="off" aria-label="Message">
+    <input type="text" id="input" placeholder="Name a product and ask about it" autocomplete="off" aria-label="Message">
     <button class="send" type="submit" id="send">Ask</button>
   </form>
   <div id="debug"></div>
@@ -208,7 +208,7 @@
       }
       if (!lastAsin) {
         say(wantsFit || wantsRisk
-          ? 'Which product? Name it, like “Ninja Foodi air fryer” or “IKEA Kallax shelf”.'
+          ? 'Which product? Tell me the product name.'
           : 'I check whether an Amazon product will fit your space or how likely it is to be returned. Name a product to start.');
         return;
       }
@@ -315,7 +315,7 @@
   }
 
   async function boot() {
-    ['Will a Ninja air fryer fit under a 40 cm cabinet?', 'How risky is an IKEA Kallax shelf?', 'What can you check?'].forEach(t => {
+    ['What can you check?'].forEach(t => {
       const b = el('button', 'chip', t); b.type = 'button'; b.onclick = () => handle(t); $('chips').append(b);
     });
     say('Hi, I\'m Alexa with ReturnKiller. Name a product and the space you have, or send a photo of the space, and I\'ll say whether it will fit before you order.');
