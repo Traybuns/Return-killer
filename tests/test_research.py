@@ -152,3 +152,12 @@ def test_throttling_is_reported_as_quota_not_failure(client):
 def test_names_the_product_guard():
     assert research.names_the_product("Ninja Foodi 6-in-1 Air Fryer", "ninja foodi air fryer")
     assert not research.names_the_product("Rolling Pin Wooden", "ninja foodi air fryer")
+
+
+def test_research_dimensions_second_pass():
+    from analyzer import ReturnKillerAnalyzer
+    an = ReturnKillerAnalyzer(use_bedrock=False)
+    an.use_bedrock, an.bedrock_client = True, FakeBedrock({"dimensions_cm": {"length": 30, "width": "25", "height": 32.5, "depth": 9}})
+    assert research.research_dimensions(an, "Ninja Foodi Air Fryer") == {"length_cm": 30.0, "width_cm": 25.0, "height_cm": 32.5}
+    an.bedrock_client = FakeBedrock({"dimensions_cm": {"height": None}})
+    assert research.research_dimensions(an, "x thing") == {}

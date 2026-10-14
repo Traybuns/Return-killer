@@ -163,9 +163,9 @@
   // ---- stand-in intent router (Alexa+ would supply this) ----
   // Answers only what was asked: fit -> check_fit, risk -> analyze_listing, a bare product name -> look it up.
   const MEASURE = /\d+(\.\d+)?\s*(cm|centimet\w*|mm|millimet\w*|inch\w*|in\b|"|ft|feet|foot|m\b|meters?)/i;
-  const FIT = /\b(fit|fits|fitting|under|clearance|space|shelf|tall|height|wide|width|room|cabinet|spot)\b/;
+  const FIT = /\b(fit|fits|fitting|under|clearance|tall|height|wide|width|measure)\b/;
   const RISK = /\b(risk|risky|return|returned|returns|safe|worth|review|reviews|complain|complaints|problem|problems|issues?)\b/;
-  const FILLER = /\b(will|would|does|do|can|could|the|a|an|my|me|it|its|is|are|was|fit|fits|fitting|under|over|in|on|at|of|to|for|about|with|cabinet|clearance|space|shelf|tall|height|wide|width|room|spot|how|risky|risk|return|returned|returns|safe|worth|buying|buy|review|reviews|complain|complaints|problem|problems|issues?|check|find|search|tell|whether|should|i|we|you|please|hey|alexa|if|this|that|there|any|some|much|many|and|or|what|whats|which|good|bad|likely|centimeters?|centimetres?|inches|inch|cm|mm|feet|foot|ft|meters?|\d+(\.\d+)?)\b/g;
+  const FILLER = /\b(will|would|does|do|can|could|the|a|an|my|me|it|its|is|are|was|fit|fits|fitting|under|over|in|on|at|of|to|for|about|with|cabinet|clearance|space|tall|height|wide|width|room|spot|how|risky|risk|return|returned|returns|safe|worth|buying|buy|review|reviews|complain|complaints|problem|problems|issues?|check|find|search|tell|whether|should|i|we|you|please|hey|alexa|if|this|that|there|any|some|much|many|and|or|what|whats|which|good|bad|likely|centimeters?|centimetres?|inches|inch|cm|mm|feet|foot|ft|meters?|\d+(\.\d+)?)\b/g;
   function findProduct(u) {
     let best = null, bestScore = 0;
     for (const p of products) {

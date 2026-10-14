@@ -200,6 +200,39 @@ def research_product(analyzer, query: str) -> Optional[Dict[str, Any]]:
     raise RuntimeError("web research failed: " + " | ".join(errors)[:600])
 
 
+DIM_PROMPT = """Find the exact outer product dimensions of this product from its Amazon listing or the
+manufacturer: "{title}"
+
+Reply with ONLY one JSON object, no prose:
+{{"dimensions_cm": {{"length": number or null, "width": number or null, "height": number or null}}}}
+Height is the vertical size of the assembled product as it would stand. Convert inches to
+centimetres. Use null for anything the sources do not state. Never guess."""
+
+
+def research_dimensions(analyzer, title: str) -> Dict[str, float]:
+    """Focused second pass for the one fact a fit check needs. Returns {} when nothing is found."""
+    title = clean_query(title)
+    if not title or not (analyzer.use_bedrock and analyzer.bedrock_client):
+        return {}
+    for model_id in grounding_model_ids(analyzer):
+        try:
+            resp = analyzer.bedrock_client.converse(
+                modelId=model_id,
+                system=[{"text": SYSTEM}],
+                messages=[{"role": "user", "content": [{"text": DIM_PROMPT.format(title=title)}]}],
+                toolConfig={"tools": [{"systemTool": {"name": "nova_grounding"}}]},
+                inferenceConfig={"maxTokens": 300, "temperature": 0.0},
+            )
+            text = "".join(b.get("text", "") for b in resp["output"]["message"]["content"])
+            raw = analyzer._extract_json_object(text)
+        except Exception as e:
+            print(f"dimension lookup failed: {e}")
+            return {}
+        d = raw.get("dimensions_cm") if isinstance(raw.get("dimensions_cm"), dict) else {}
+        return {f"{k}_cm": n for k in ("length", "width", "height") if (n := _num(d.get(k))) is not None}
+    return {}
+
+
 def grounding_model_ids(analyzer) -> List[str]:
     """Web grounding only exists on the US cross-region profile, so never try the bare model id."""
     ids = [m for m in analyzer._model_ids() if m.startswith("us.")]
