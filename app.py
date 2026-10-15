@@ -1127,7 +1127,7 @@ def demo_ui():
     <section class="glass picker">
       <div class="picker-label">Or look up a product yourself</div>
       <form class="picker-row" id="searchForm">
-        <input id="productSearch" type="search" placeholder="Search any product, e.g. Ninja Foodi air fryer" autocomplete="off" />
+        <input id="productSearch" type="search" placeholder="Search any product" autocomplete="off" />
         <button class="btn" type="submit" id="searchBtn">Search</button>
       </form>
       <div id="searchResults" class="search-results" role="listbox" aria-label="Search results"></div>
